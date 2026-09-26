@@ -1,11 +1,16 @@
 export const PHOTO_COUNT = 8;
 export const CONSENT_VERSION = 'identity-training-v1';
-export function validateReferenceSelfie(selfie: Pick<File, 'size' | 'type'> | null | undefined, capturedAt: number, now = Date.now()) {
-  if (!selfie || selfie.type !== 'image/jpeg' || selfie.size <= 0 || selfie.size > 20 * 1024 * 1024) {
-    throw new Error('Take a clear selfie with your camera before continuing.');
+export type SelfieSelection = { source: 'camera' | 'upload'; selectedAt: number; capturedAt?: number };
+export function validateReferenceSelfie(selfie: Pick<File, 'size' | 'type'> | null | undefined, selection: SelfieSelection, now = Date.now()) {
+  if (!selfie || !['image/jpeg', 'image/png', 'image/webp'].includes(selfie.type) || selfie.size <= 0 || selfie.size > 20 * 1024 * 1024) {
+    throw new Error('Take or choose a clear recent selfie (JPG, PNG, or WebP, up to 20 MB).');
   }
-  if (!Number.isFinite(capturedAt) || capturedAt < now - 60 * 60 * 1000 || capturedAt > now + 2 * 60 * 1000) {
-    throw new Error('Take a new selfie so your reference shows your current look.');
+  const fresh = (time: number | undefined) => Number.isFinite(time) && time! >= now - 60 * 60 * 1000 && time! <= now + 2 * 60 * 1000;
+  if (!selection || !['camera', 'upload'].includes(selection.source) || !fresh(selection.selectedAt)) {
+    throw new Error('Take or choose your reference selfie again before continuing.');
+  }
+  if (selection.source === 'camera' ? !fresh(selection.capturedAt) || selection.capturedAt! > selection.selectedAt : selection.capturedAt !== undefined) {
+    throw new Error('Take or choose your reference selfie again before continuing.');
   }
 }
 export function validateMeasurements(heightCm: number, weightKg: number) {

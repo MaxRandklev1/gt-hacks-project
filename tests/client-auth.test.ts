@@ -106,12 +106,13 @@ describe('Authentication return and account boundaries', () => {
     mocks.auth.currentUser = userA;
     const photos = Array.from({ length: 8 }, (_, i) => new File([`photo${i}`], `photo${i}.jpg`, { type: 'image/jpeg' }));
     const selfie = new File(['selfie'], 'live-selfie.jpg', { type: 'image/jpeg' });
-    await expect(submitOnboarding({ heightCm: 175, weightKg: 70, measurementSystem: 'us', photos, selfie, selfieCapturedAt: Date.now(), consent: true })).rejects.toThrow(/account changed/i);
+    const capturedAt = Date.now();
+    await expect(submitOnboarding({ heightCm: 175, weightKg: 70, measurementSystem: 'us', photos, selfie, selfieSource: 'camera', selfieSelectedAt: capturedAt, selfieCapturedAt: capturedAt, consent: true })).rejects.toThrow(/account changed/i);
     expect(mocks.upload).toHaveBeenCalledTimes(9);
     expect(mocks.transaction).not.toHaveBeenCalled();
   });
 
-  it('uploads the selfie separately and pins the current capture as the training request reference', async () => {
+  it.each(['camera', 'upload'] as const)('uploads the %s selfie separately as the training request reference', async source => {
     vi.stubGlobal('createImageBitmap', vi.fn(async () => ({ width: 512, height: 512, close: vi.fn() })));
     let photo = 0;
     vi.stubGlobal('document', { createElement: () => ({ getContext: () => ({ drawImage: vi.fn() }), toBlob: (done: (blob: Blob) => void) => done(new Blob([`unique-photo-${photo++}`])) }) });
@@ -120,15 +121,18 @@ describe('Authentication return and account boundaries', () => {
     mocks.transaction.mockImplementation(async (_db, update) => update({ get: async () => ({ exists: () => false }), set: write }));
     mocks.auth.currentUser = userA;
     const photos = Array.from({ length: 8 }, (_, i) => new File([`photo${i}`], `photo${i}.jpg`, { type: 'image/jpeg' }));
-    const selfie = new File(['current-look'], 'selfie.jpg', { type: 'image/jpeg' });
+    const selfie = new File(['current-look'], source === 'camera' ? 'selfie.jpg' : 'recent-selfie.png', { type: source === 'camera' ? 'image/jpeg' : 'image/png', lastModified: 1 });
     const capturedAt = Date.now();
     const { submitOnboarding } = await import('../web/src/lib/client');
-    await submitOnboarding({ heightCm: 175, weightKg: 70, measurementSystem: 'us', photos, selfie, selfieCapturedAt: capturedAt, consent: true });
+    await submitOnboarding({ heightCm: 175, weightKg: 70, measurementSystem: 'us', photos, selfie, selfieSource: source, selfieSelectedAt: capturedAt, ...(source === 'camera' ? { selfieCapturedAt: capturedAt } : {}), consent: true });
     expect(mocks.upload).toHaveBeenCalledTimes(9);
     const selfiePath = mocks.upload.mock.calls[8][0];
     expect(selfiePath).toMatch(/^users\/account-a\/uploads\/[a-f0-9-]+\/selfie\.jpg$/);
     const job = write.mock.calls.map(call => call[1]).find(data => data.kind === 'train');
-    expect(job).toMatchObject({ requestVersion: 2, uid: userA.uid, selfiePath, selfieCapturedAt: { captureMillis: capturedAt } });
+    expect(job).toMatchObject({ requestVersion: 3, uid: userA.uid, selfiePath, selfieSource: source, selfieSelectedAt: { captureMillis: capturedAt } });
+    if (source === 'camera') expect(job.selfieCapturedAt).toEqual({ captureMillis: capturedAt });
+    else expect(job).not.toHaveProperty('selfieCapturedAt');
+    expect(mocks.upload.mock.calls[8][2]).toMatchObject({ contentType: 'image/jpeg', customMetadata: { source: source === 'camera' ? 'onboarding-camera' : 'onboarding-upload' } });
     expect(job.photoPaths).toHaveLength(8);
     expect(job.photoPaths).not.toContain(selfiePath);
     expect(write.mock.calls.some(call => call[1].measurementSystem === 'us')).toBe(true);

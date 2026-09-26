@@ -136,7 +136,8 @@ class ProfileStore:
         ]
         result["photo_count"] = len(profile["photos"])
         result["selected_count"] = len(selected_photos(profile))
-        result["reference_source"] = "live_selfie" if profile.get("inference_reference_required") else "selected_photo"
+        result["reference_source"] = ((profile.get("inference_reference") or {}).get("source")
+                                      if profile.get("inference_reference_required") else "selected_photo")
         result["warnings"] = data_warnings(profile)
         result["training"] = {
             "status": profile.get("training", {}).get("status", "not_trained"),
@@ -220,15 +221,15 @@ class ProfileStore:
     def reference_path(self, profile, reference_index):
         reference = profile.get("inference_reference")
         if profile.get("inference_reference_required") or reference is not None:
-            if (not isinstance(reference, dict) or reference.get("source") != "live_selfie"
+            if (not isinstance(reference, dict) or reference.get("source") not in ("live_selfie", "recent_selfie")
                     or reference.get("owner") != profile.get("cloud_identity")
                     or not isinstance(reference.get("owner"), dict)
                     or reference.get("filename") != "cloud-reference/reference.png"):
-                raise ProfileError("This cloud identity requires its live-selfie reference. Restore it through the app.")
+                raise ProfileError("This cloud identity requires its selfie reference. Restore it through the app.")
             path = within(self.profile_dir(profile["id"]), reference["filename"])
             if (not path.is_file() or path.stat().st_size > MAX_FILE_BYTES
                     or hashlib.sha256(path.read_bytes()).hexdigest() != reference.get("sha256")):
-                raise ProfileError("The live-selfie reference is missing or changed. Restore it through the app.")
+                raise ProfileError("The selfie reference is missing or changed. Restore it through the app.")
             return path
         photos = selected_photos(profile)
         if not 0 <= reference_index < len(photos):

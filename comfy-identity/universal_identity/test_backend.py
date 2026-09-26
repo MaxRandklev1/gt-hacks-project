@@ -74,6 +74,14 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(self.store.reference_path(profile, 4), path)
         self.assertEqual(profile["photos"], original_photos)
         self.assertEqual(len(selected_photos(profile)), 5)
+        self.assertEqual(self.store.public(profile)["reference_source"], "live_selfie")
+        profile["inference_reference"]["source"] = "recent_selfie"
+        self.assertEqual(self.store.reference_path(profile, 4), path)
+        self.assertEqual(self.store.public(profile)["reference_source"], "recent_selfie")
+        profile["inference_reference"]["source"] = "unknown"
+        with self.assertRaises(ProfileError):
+            self.store.reference_path(profile, 0)
+        profile["inference_reference"]["source"] = "recent_selfie"
         profile["inference_reference"]["owner"] = {"uid": "bob", "version": "run1"}
         with self.assertRaises(ProfileError):
             self.store.reference_path(profile, 0)
@@ -96,7 +104,7 @@ class ProfileTests(unittest.TestCase):
         path = self.store.profile_dir(profile["id"]) / "cloud-reference/reference.png"
         path.parent.mkdir()
         Image.new("RGB", (320, 480), "red").save(path)
-        profile["inference_reference"] = {"source": "live_selfie", "filename": "cloud-reference/reference.png",
+        profile["inference_reference"] = {"source": "recent_selfie", "filename": "cloud-reference/reference.png",
             "owner": profile["cloud_identity"], "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
         self.store.save(profile)
         name = "identity_node_selfie_test"

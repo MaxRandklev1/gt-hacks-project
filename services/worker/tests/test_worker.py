@@ -85,6 +85,31 @@ def fake_store(data):
 
 
 class WorkerTests(unittest.TestCase):
+    def test_version3_selfie_source_and_selection_timestamp_contract(self):
+        stamp, upload = now(), str(uuid.uuid4())
+        job = {"uid": "alice", "kind": "train", "requestVersion": 3, "uploadId": upload,
+               "selfiePath": f"users/alice/uploads/{upload}/selfie.jpg", "selfieSource": "upload",
+               "selfieSelectedAt": stamp, "createdAt": stamp,
+               "photoPaths": [f"users/alice/uploads/{upload}/{i}.jpg" for i in range(8)]}
+        self.assertEqual(validate_job("job1", job), "alice")
+        camera = job | {"selfieSource": "camera", "selfieCapturedAt": stamp}
+        self.assertEqual(validate_job("job1", camera), "alice")
+        for altered in [job | {"selfieSource": "gallery"}, job | {"selfieSelectedAt": None},
+                        job | {"selfieSelectedAt": stamp - timedelta(hours=2)},
+                        job | {"selfieSelectedAt": stamp + timedelta(minutes=3)},
+                        job | {"selfieCapturedAt": stamp}, job | {"selfieCapturedAt": None},
+                        job | {"selfieSource": "camera"}, camera | {"selfieCapturedAt": stamp + timedelta(seconds=1)},
+                        camera | {"selfieCapturedAt": stamp - timedelta(hours=2)},
+                        camera | {"selfieCapturedAt": stamp.replace(tzinfo=None)}]:
+            with self.subTest(altered=altered), self.assertRaises(JobError):
+                validate_job("job1", altered)
+        # Queue delays cannot make a valid submission stale; choice time is not image age.
+        old = stamp - timedelta(days=2)
+        self.assertEqual(validate_job("job1", job | {"createdAt": old, "selfieSelectedAt": old}), "alice")
+        for version in (1, 2, 3):
+            self.assertEqual(validate_job("job1", {"uid": "alice", "kind": "generate", "requestVersion": version,
+                                                   "garmentId": "shirt"}), "alice")
+
     def test_training_requires_exactly_eight_owner_paths(self):
         upload = str(uuid.uuid4())
         job = {"uid": "alice", "kind": "train", "requestVersion": 2, "uploadId": upload,
@@ -231,6 +256,12 @@ class WorkerTests(unittest.TestCase):
             comfy.submit.assert_not_called()
 
     def test_training_selects_five_and_publishes_owner_manifest(self):
+        self.check_training_reference("camera")
+
+    def test_uploaded_selfie_is_reference_without_becoming_training_data(self):
+        self.check_training_reference("upload")
+
+    def check_training_reference(self, source):
         with tempfile.TemporaryDirectory() as temp:
             folder = Path(temp)
             adapter = folder / "fake.safetensors"
@@ -248,13 +279,16 @@ class WorkerTests(unittest.TestCase):
                                           "reason": "test", "metrics": {}} for i in range(8)])
             job = {"photoPaths": [f"users/alice/uploads/upload/{i}.jpg" for i in range(8)],
                    "selfiePath": "users/alice/uploads/upload/selfie.jpg", "selfieCapturedAt": now()}
+            if source == "upload":
+                job = {key: value for key, value in job.items() if key != "selfieCapturedAt"}
+                job |= {"selfieSource": "upload", "selfieSelectedAt": now()}
             selfie_validator = Mock(return_value={"face_count": 1})
             worker = Worker(store, comfy, profiles, {}, folder / "state", selector=selector, selfie_validator=selfie_validator)
             worker.train("train1", job, "alice", folder, lease)
             self.assertEqual(len(selector.call_args.args[0]), 8)
             self.assertEqual(len(comfy.create_profile.call_args.args[1]), 5)
             self.assertTrue(all(path.read_bytes() != selfie for path in comfy.create_profile.call_args.args[1]))
-            self.assertTrue(all(path.name != "live-selfie.png" for path in selector.call_args.args[0]))
+            self.assertTrue(all(path.name != "selfie-reference.png" for path in selector.call_args.args[0]))
             selfie_validator.assert_called_once()
             comfy.train.assert_called_once_with("alice-local")
             comfy.photo.assert_not_called()
@@ -265,10 +299,15 @@ class WorkerTests(unittest.TestCase):
             self.assertEqual(manifest["trigger"], "trained_person")
             self.assertEqual(manifest["steps"], 400)
             self.assertEqual(manifest["schemaVersion"], 2)
-            self.assertEqual(manifest["referenceSource"], "live_selfie")
+            reference_source = "recent_selfie" if source == "upload" else "live_selfie"
+            self.assertEqual(manifest["referenceSource"], reference_source)
+            self.assertEqual(manifest["selfieSelectedAt"], job.get("selfieSelectedAt", job.get("selfieCapturedAt")).isoformat())
+            if source == "upload":
+                self.assertNotIn("selfieCapturedAt", manifest)
+                self.assertNotIn("selfieCapturedAt", lease.write.call_args.kwargs["user_fields"]["identity"])
             self.assertEqual(manifest["referenceSourcePath"], job["selfiePath"])
             self.assertEqual(uploaded[paths["referencePath"]], selfie)
-            profiles.bind_reference.assert_called_once_with("alice-local", "alice", "train1", selfie)
+            profiles.bind_reference.assert_called_once_with("alice-local", "alice", "train1", selfie, source=reference_source)
             self.assertEqual(sum(r["selected"] for r in manifest["selectedPhotos"]), 5)
             self.assertTrue(all(r["sourcePath"].startswith("users/alice/") for r in manifest["selectedPhotos"]))
             self.assertEqual(lease.write.call_args.args[0]["status"], "completed")
@@ -277,24 +316,26 @@ class WorkerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             store, comfy = Mock(), Mock()
             store.download.return_value = png()
-            worker = Worker(store, comfy, Mock(), {}, temp, selfie_validator=Mock(side_effect=ValueError("Retake your live selfie.")))
+            worker = Worker(store, comfy, Mock(), {}, temp, selfie_validator=Mock(side_effect=ValueError("Take or choose a clear recent selfie.")))
             with self.assertRaises(JobError):
                 worker.train("job1", {"selfiePath": "users/alice/uploads/x/selfie.jpg"}, "alice", Path(temp), Mock())
             comfy.create_profile.assert_not_called()
             comfy.train.assert_not_called()
 
     def test_schema2_cached_and_restored_profiles_use_selfie_without_training_photo_fallback(self):
-        for cached in (False, True):
-            with self.subTest(cached=cached), tempfile.TemporaryDirectory() as temp:
+        for cached, source in ((False, "live_selfie"), (True, "live_selfie"), (False, "recent_selfie"), (True, "recent_selfie")):
+            with self.subTest(cached=cached, source=source), tempfile.TemporaryDirectory() as temp:
                 folder = Path(temp)
                 profiles = LocalProfiles(folder / "profiles")
                 reference, adapter = png(color="red"), b"fake-weights"
                 paths = identity_paths("alice", "train1")
                 upload = str(uuid.uuid4())
                 manifest = {"schemaVersion": 2, "uid": "alice", "version": "train1", "trigger": "trained_person",
-                            "steps": 400, **paths, "referenceSource": "live_selfie",
+                            "steps": 400, **paths, "referenceSource": source,
                             "referenceSourcePath": f"users/alice/uploads/{upload}/selfie.jpg", "selfieCapturedAt": now().isoformat(),
                             "referenceSha256": sha256(reference), "adapterSha256": sha256(adapter)}
+                if source == "recent_selfie":
+                    manifest["selfieSelectedAt"] = manifest.pop("selfieCapturedAt")
                 def create(*_):
                     directory = profiles.root / "person"
                     directory.mkdir(parents=True)
@@ -305,7 +346,7 @@ class WorkerTests(unittest.TestCase):
                 payloads = {paths["manifestPath"]: json.dumps(manifest).encode(), paths["adapterPath"]: adapter, paths["referencePath"]: reference}
                 store.download.side_effect = lambda path, limit: payloads[path]
                 comfy.create_profile.side_effect = create
-                comfy.profile.return_value = {"reference_source": "live_selfie", "training": {"adapter_available": True}}
+                comfy.profile.return_value = {"reference_source": source, "training": {"adapter_available": True}}
                 if cached:
                     create()
                     profiles.restore("person", "alice", manifest, adapter, reference_bytes=reference)
@@ -316,7 +357,10 @@ class WorkerTests(unittest.TestCase):
                 worker = Worker(store, comfy, profiles, {}, folder / "state")
                 result = worker.identity_profile("alice", {"status": "ready", "version": "train1", "profileId": "person", **paths}, folder, lease)
                 self.assertEqual(result, "person")
-                self.assertEqual(profiles.verify_reference(result, "alice", "train1", sha256(reference)).read_bytes(), reference)
+                self.assertEqual(profiles.verify_reference(result, "alice", "train1", sha256(reference), source=source).read_bytes(), reference)
+                with self.assertRaises(ValueError):
+                    profiles.verify_reference(result, "alice", "train1", sha256(reference),
+                                              source="live_selfie" if source == "recent_selfie" else "recent_selfie")
                 if cached:
                     comfy.create_profile.assert_not_called()
                     self.assertEqual(store.download.call_count, 1)  # Only manifest; local selfie verified.
@@ -324,6 +368,24 @@ class WorkerTests(unittest.TestCase):
                     self.assertFalse(profiles.read(result)[1]["photos"][0]["selected"])
                 comfy.train.assert_not_called()
                 comfy.photo.assert_not_called()
+
+    def test_schema2_rejects_false_capture_claim_and_invalid_source_timestamps(self):
+        stamp = now().isoformat()
+        paths = identity_paths("alice", "train1")
+        manifest = {"schemaVersion": 2, "uid": "alice", "version": "train1", "steps": 400, **paths,
+                    "referenceSource": "recent_selfie", "selfieSelectedAt": stamp,
+                    "referenceSourcePath": f"users/alice/uploads/{uuid.uuid4()}/selfie.jpg"}
+        for changed in [{"selfieCapturedAt": stamp}, {"selfieCapturedAt": None}, {"selfieSelectedAt": None},
+                        {"selfieSelectedAt": "not-a-timestamp"}, {"selfieSelectedAt": "2026-09-26T10:00:00"},
+                        {"referenceSource": "other"}, {"referenceSource": "live_selfie"},
+                        {"referenceSource": "live_selfie", "selfieCapturedAt": (now() + timedelta(days=1)).isoformat()}]:
+            with self.subTest(changed=changed), tempfile.TemporaryDirectory() as temp:
+                store, comfy = Mock(), Mock()
+                store.download.return_value = json.dumps(manifest | changed).encode()
+                worker = Worker(store, comfy, Mock(), {}, temp)
+                with self.assertRaises(JobError):
+                    worker.identity_profile("alice", {"status": "ready", "version": "train1", **paths}, Path(temp), Mock())
+                comfy.create_profile.assert_not_called()
 
     def test_schema2_cannot_fall_back_when_reference_provenance_is_missing(self):
         with tempfile.TemporaryDirectory() as temp:

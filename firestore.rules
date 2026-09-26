@@ -41,15 +41,30 @@ service cloud.firestore {
       allow read: if owner(resource.data.uid);
       function profile() { return getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data; }
       function photoPath(slot) { return 'users/' + request.auth.uid + '/uploads/' + request.resource.data.uploadId + '/' + slot + '.jpg'; }
-      function trainRequest(data) {
+      function freshReferenceTime(value) {
+        return value is timestamp
+          && value >= request.time - duration.value(1, 'h')
+          && value <= request.time + duration.value(2, 'm');
+      }
+      function cameraReferenceV2(data) {
         return data.keys().hasOnly(['uid','kind','status','requestVersion','createdAt','uploadId','photoPaths','selfiePath','selfieCapturedAt'])
+          && freshReferenceTime(data.selfieCapturedAt);
+      }
+      function selectedReferenceV3(data) {
+        return data.keys().hasOnly(['uid','kind','status','requestVersion','createdAt','uploadId','photoPaths','selfiePath','selfieSource','selfieSelectedAt','selfieCapturedAt'])
+          && data.selfieSource in ['camera','upload']
+          && freshReferenceTime(data.selfieSelectedAt)
+          && ((data.selfieSource == 'camera' && freshReferenceTime(data.selfieCapturedAt)
+              && data.selfieCapturedAt <= data.selfieSelectedAt)
+            || (data.selfieSource == 'upload' && !('selfieCapturedAt' in data)));
+      }
+      function trainRequest(data) {
+        return ((data.requestVersion == 2 && cameraReferenceV2(data))
+            || (data.requestVersion == 3 && selectedReferenceV3(data)))
           && data.uploadId is string && data.uploadId.matches('^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
           && data.photoPaths is list && data.photoPaths.size() == 8
           && data.photoPaths == [photoPath('0'),photoPath('1'),photoPath('2'),photoPath('3'),photoPath('4'),photoPath('5'),photoPath('6'),photoPath('7')]
           && data.selfiePath == photoPath('selfie')
-          && data.selfieCapturedAt is timestamp
-          && data.selfieCapturedAt >= request.time - duration.value(1, 'h')
-          && data.selfieCapturedAt <= request.time + duration.value(2, 'm')
           && validMeasurements(profile()) && profile().consentVersion == 'identity-training-v1';
       }
       function generationRequest(data) {
@@ -59,7 +74,7 @@ service cloud.firestore {
           && profile().identity.status == 'ready';
       }
       allow create: if request.auth != null && owner(request.resource.data.uid)
-        && request.resource.data.requestVersion is int && request.resource.data.requestVersion == 2
+        && request.resource.data.requestVersion is int && request.resource.data.requestVersion in [2,3]
         && request.resource.data.status == 'queued'
         && request.resource.data.createdAt == request.time
         && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)/queue/current).data.jobId == jobId

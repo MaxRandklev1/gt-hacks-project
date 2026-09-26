@@ -146,7 +146,7 @@ async function enqueue(uid: string, payload: Record<string, unknown>, profileFie
     }
     assertAccount(uid);
     if (profileFields) tx.set(doc(db, 'users', user.uid), profileFields, { merge: true });
-    tx.set(job, { ...payload, uid: user.uid, status: 'queued', requestVersion: 2, createdAt: serverTimestamp() });
+    tx.set(job, { ...payload, uid: user.uid, status: 'queued', requestVersion: 3, createdAt: serverTimestamp() });
     tx.set(lock, { jobId: job.id, updatedAt: serverTimestamp() });
     return job.id;
   });
@@ -165,9 +165,10 @@ async function cleanPhoto(file: File): Promise<Blob> {
     return await new Promise<Blob>((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('Could not prepare this photo.')), 'image/jpeg', 0.94));
   } finally { bitmap.close(); }
 }
-export async function submitOnboarding(input: { heightCm: number; weightKg: number; measurementSystem: 'us' | 'metric'; photos: File[]; selfie: File; selfieCapturedAt: number; consent: boolean }, onProgress?: (progress: number) => void) {
+export async function submitOnboarding(input: { heightCm: number; weightKg: number; measurementSystem: 'us' | 'metric'; photos: File[]; selfie: File; selfieSource: 'camera' | 'upload'; selfieSelectedAt: number; selfieCapturedAt?: number; consent: boolean }, onProgress?: (progress: number) => void) {
   validateMeasurements(input.heightCm, input.weightKg); validatePhotoFiles(input.photos);
-  validateReferenceSelfie(input.selfie, input.selfieCapturedAt);
+  const selection = { source: input.selfieSource, selectedAt: input.selfieSelectedAt, capturedAt: input.selfieCapturedAt };
+  validateReferenceSelfie(input.selfie, selection);
   if (!['us', 'metric'].includes(input.measurementSystem)) throw new Error('Choose US or metric measurements.');
   if (!input.consent) throw new Error('Please confirm these are your photos and allow identity training.');
   const { storage, user } = signedIn();
@@ -186,10 +187,10 @@ export async function submitOnboarding(input: { heightCm: number; weightKg: numb
   }
   assertAccount(user.uid);
   const selfiePath = `users/${user.uid}/uploads/${uploadId}/selfie.jpg`;
-  const selfieTask = uploadBytesResumable(ref(storage, selfiePath), selfie, { contentType: 'image/jpeg', customMetadata: { owner: user.uid, source: 'onboarding-camera' } });
+  const selfieTask = uploadBytesResumable(ref(storage, selfiePath), selfie, { contentType: 'image/jpeg', customMetadata: { owner: user.uid, source: input.selfieSource === 'camera' ? 'onboarding-camera' : 'onboarding-upload' } });
   await new Promise<void>((resolve, reject) => selfieTask.on('state_changed', snapshot => onProgress?.((8 + snapshot.bytesTransferred / snapshot.totalBytes) / 9), reject, resolve));
-  validateReferenceSelfie(input.selfie, input.selfieCapturedAt);
-  return enqueue(user.uid, { kind: 'train', uploadId, photoPaths: paths, selfiePath, selfieCapturedAt: Timestamp.fromMillis(input.selfieCapturedAt) }, { heightCm: input.heightCm, weightKg: input.weightKg, measurementSystem: input.measurementSystem, consentVersion: CONSENT_VERSION, consentAt: serverTimestamp(), updatedAt: serverTimestamp() });
+  validateReferenceSelfie(input.selfie, selection);
+  return enqueue(user.uid, { kind: 'train', uploadId, photoPaths: paths, selfiePath, selfieSource: input.selfieSource, selfieSelectedAt: Timestamp.fromMillis(input.selfieSelectedAt), ...(input.selfieSource === 'camera' ? { selfieCapturedAt: Timestamp.fromMillis(input.selfieCapturedAt!) } : {}) }, { heightCm: input.heightCm, weightKg: input.weightKg, measurementSystem: input.measurementSystem, consentVersion: CONSENT_VERSION, consentAt: serverTimestamp(), updatedAt: serverTimestamp() });
 }
 export async function requestGeneration(garmentId: string) {
   const { user } = signedIn();

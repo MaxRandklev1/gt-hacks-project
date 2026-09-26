@@ -1,4 +1,4 @@
-"""Local capture-quality screening; this is not identity or liveness proof."""
+"""Local selfie-quality screening; this is not identity, recency or liveness proof."""
 from pathlib import Path
 
 try:
@@ -10,5 +10,5 @@ except ImportError:
 def validate_selfie(path):
     record, usable = _analyze(Path(path), 0)
     if usable is None:
-        raise ValueError("Retake your live selfie. " + record["reason"])
+        raise ValueError("Take or choose a clear recent selfie. " + record["reason"])
     return record["metrics"]

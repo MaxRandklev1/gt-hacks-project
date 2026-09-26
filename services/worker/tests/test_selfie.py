@@ -17,12 +17,12 @@ class SelfieTests(unittest.TestCase):
             with patch("services.worker.photo_selection._detect_faces", return_value=[(100, 100, 220, 220)]):
                 self.assertEqual(validate_selfie(path)["face_count"], 1)
             for boxes in ([], [(100, 100, 220, 220), (1, 1, 110, 110)], [(100, 100, 50, 50)]):
-                with patch("services.worker.photo_selection._detect_faces", return_value=boxes), self.assertRaisesRegex(ValueError, "Retake your live selfie"):
+                with patch("services.worker.photo_selection._detect_faces", return_value=boxes), self.assertRaisesRegex(ValueError, "Take or choose a clear recent selfie"):
                     validate_selfie(path)
 
     def test_unreadable_selfie_rejected(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "broken.jpg"
             path.write_bytes(b"not an image")
-            with self.assertRaisesRegex(ValueError, "Retake your live selfie"):
+            with self.assertRaisesRegex(ValueError, "Take or choose a clear recent selfie"):
                 validate_selfie(path)

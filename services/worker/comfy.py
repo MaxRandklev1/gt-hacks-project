@@ -174,7 +174,9 @@ class LocalProfiles:
             profile["inference_reference_required"] = True
         self.save(directory, profile)
 
-    def bind_reference(self, profile_id, uid, version, data):
+    def bind_reference(self, profile_id, uid, version, data, *, source="live_selfie"):
+        if source not in ("live_selfie", "recent_selfie"):
+            raise ValueError("Invalid selfie reference source.")
         directory, profile = self.read(profile_id)
         if profile.get("cloud_identity") != {"uid": uid, "version": version}:
             raise ValueError("Reference owner does not match the local profile.")
@@ -184,22 +186,22 @@ class LocalProfiles:
         temporary.write_bytes(data)
         temporary.replace(path)
         profile["inference_reference_required"] = True
-        profile["inference_reference"] = {"source": "live_selfie", "filename": "cloud-reference/reference.png",
+        profile["inference_reference"] = {"source": source, "filename": "cloud-reference/reference.png",
                                           "sha256": hashlib.sha256(data).hexdigest(),
                                           "owner": {"uid": uid, "version": version}}
         self.save(directory, profile)
 
-    def verify_reference(self, profile_id, uid, version, expected_hash):
+    def verify_reference(self, profile_id, uid, version, expected_hash, *, source="live_selfie"):
         directory, profile = self.read(profile_id)
         reference = profile.get("inference_reference") or {}
         owner = {"uid": uid, "version": version}
         if (profile.get("cloud_identity") != owner or profile.get("inference_reference_required") is not True
-                or reference.get("source") != "live_selfie" or reference.get("owner") != owner
+                or source not in ("live_selfie", "recent_selfie") or reference.get("source") != source or reference.get("owner") != owner
                 or reference.get("filename") != "cloud-reference/reference.png" or reference.get("sha256") != expected_hash):
-            raise ValueError("The cached profile is missing its required live-selfie reference.")
+            raise ValueError("The cached profile is missing its required selfie reference.")
         path = contained(directory, reference["filename"])
         if not path.is_file() or path.stat().st_size > 20 * 1024 * 1024 or hashlib.sha256(path.read_bytes()).hexdigest() != expected_hash:
-            raise ValueError("The cached live-selfie reference failed integrity validation.")
+            raise ValueError("The cached selfie reference failed integrity validation.")
         return path
 
     def adapter(self, profile_id, uid, version):
@@ -220,9 +222,9 @@ class LocalProfiles:
         if not isinstance(trigger, str) or not re.fullmatch(r"[A-Za-z0-9_]{1,100}", trigger):
             raise ValueError("Invalid identity trigger in saved manifest.")
         selfie = manifest.get("schemaVersion") == 2
-        if selfie and (manifest.get("referenceSource") != "live_selfie" or reference_bytes is None
+        if selfie and (manifest.get("referenceSource") not in ("live_selfie", "recent_selfie") or reference_bytes is None
                        or hashlib.sha256(reference_bytes).hexdigest() != manifest.get("referenceSha256")):
-            raise ValueError("Restoring this identity requires its verified live-selfie reference.")
+            raise ValueError("Restoring this identity requires its verified selfie reference.")
         adapter = contained(directory, "cloud-import/adapter.safetensors")
         adapter.parent.mkdir(exist_ok=True)
         adapter.write_bytes(adapter_bytes)
@@ -236,4 +238,4 @@ class LocalProfiles:
         profile["training"] = {"status": "completed", "job_id": None}
         self.save(directory, profile)
         if selfie:
-            self.bind_reference(profile_id, uid, manifest["version"], reference_bytes)
+            self.bind_reference(profile_id, uid, manifest["version"], reference_bytes, source=manifest["referenceSource"])

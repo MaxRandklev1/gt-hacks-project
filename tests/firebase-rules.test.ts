@@ -50,6 +50,14 @@ const train = (overrides: Record<string, unknown> = {}) => ({
   uid: ALICE, kind: 'train', status: 'queued', requestVersion: 2, createdAt: stamp(),
   uploadId: UPLOAD_ID, photoPaths: paths(), selfiePath: selfiePathFor(), selfieCapturedAt: capturedAt(), ...overrides,
 });
+const trainV3 = (selfieSource: 'camera' | 'upload' = 'camera', overrides: Record<string, unknown> = {}) => {
+  const selected = capturedAt();
+  const payload: Record<string, unknown> = train({
+    requestVersion: 3, selfieSource, selfieSelectedAt: selected, selfieCapturedAt: selected,
+  });
+  if (selfieSource === 'upload') delete payload.selfieCapturedAt;
+  return { ...payload, ...overrides };
+};
 const generate = (overrides: Record<string, unknown> = {}) => ({
   uid: ALICE, kind: 'generate', status: 'queued', requestVersion: 2, createdAt: stamp(), garmentId: 'coat-1', ...overrides,
 });
@@ -218,7 +226,7 @@ describe('Training requests and the per-user queue lock', () => {
     await assertFails(enqueue('wrong-capture-type', train({ selfieCapturedAt })));
   });
 
-  it.each([1, 3, '2', 2.5, null])('rejects new training request version %s', async requestVersion => {
+  it.each([1, 4, '2', '3', 2.5, 3.5, null, true])('rejects new training request version %s', async requestVersion => {
     await assertFails(enqueue('wrong-train-version', train({ requestVersion })));
   });
 
@@ -257,14 +265,116 @@ describe('Training requests and the per-user queue lock', () => {
   });
 });
 
-describe('Generation requirements', () => {
-  it('accepts a server-ready identity and active garment', async () => {
-    await seedProfile(ALICE, { identity: { status: 'ready', version: 'trained' } });
-    await seed({ 'garments/coat-1': { active: true } });
-    await assertSucceeds(enqueue('generation', generate()));
+describe('Version-3 camera and uploaded references', () => {
+  beforeEach(async () => { await seedProfile(); });
+
+  it.each(['camera', 'upload'] as const)('accepts an owner %s reference with a recent selection timestamp', async source => {
+    await assertSucceeds(enqueue('reference-v3', trainV3(source)));
   });
 
-  it.each([1, 3, '2', 2.5, null])('rejects new generation request version %s', async requestVersion => {
+  it('retains the strict version-2 camera payload for cached clients', async () => {
+    await assertSucceeds(enqueue('legacy-camera-v2', train()));
+  });
+
+  it.each([
+    { selfieSource: 'camera' },
+    { selfieSource: 'upload' },
+    { selfieSelectedAt: capturedAt() },
+  ])('rejects mixing version-3 fields into the strict version-2 payload (%j)', async extra => {
+    await assertFails(enqueue('mixed-v2-fields', train(extra)));
+  });
+
+  it.each(['selfiePath', 'selfieSource', 'selfieSelectedAt'] as const)('requires version-3 field %s for both sources', async field => {
+    for (const source of ['camera', 'upload'] as const) {
+      const payload: Record<string, unknown> = trainV3(source);
+      delete payload[field];
+      await assertFails(enqueue(`missing-${source}`, payload));
+    }
+  });
+
+  it.each(['library', 'Camera', '', 1, null])('rejects unsupported reference source %s', async selfieSource => {
+    await assertFails(enqueue('invalid-source', trainV3('upload', { selfieSource })));
+  });
+
+  it.each(['2026-09-26T12:00:00Z', 123456789, null])('rejects non-timestamp selection %s', async selfieSelectedAt => {
+    await assertFails(enqueue('invalid-selection-type', trainV3('upload', { selfieSelectedAt })));
+  });
+
+  it.each([-61 * 60_000, 3 * 60_000])('rejects selection outside the fresh window (%s ms)', async offset => {
+    for (const source of ['camera', 'upload'] as const) {
+      const time = capturedAt(offset);
+      await assertFails(enqueue(`invalid-selection-${source}`, trainV3(source, {
+        selfieSelectedAt: time, ...(source === 'camera' ? { selfieCapturedAt: time } : {}),
+      })));
+    }
+  });
+
+  it.each([-59 * 60_000, 90_000])('accepts upload selection within clock tolerance (%s ms), without claiming a capture date', async offset => {
+    await assertSucceeds(enqueue('recent-upload-selection', trainV3('upload', { selfieSelectedAt: capturedAt(offset) })));
+  });
+
+  it('requires camera capture time and permits capture before or at selection', async () => {
+    const selected = capturedAt();
+    await assertSucceeds(enqueue('camera-before-selection', trainV3('camera', {
+      selfieCapturedAt: capturedAt(-30_000), selfieSelectedAt: selected,
+    })));
+  });
+
+  it('rejects a camera payload without a capture timestamp', async () => {
+    const payload = trainV3();
+    delete payload.selfieCapturedAt;
+    await assertFails(enqueue('missing-camera-capture', payload));
+  });
+
+  it.each(['2026-09-26T12:00:00Z', 123456789, null])('rejects non-timestamp camera capture %s', async selfieCapturedAt => {
+    await assertFails(enqueue('invalid-camera-capture-type', trainV3('camera', { selfieCapturedAt })));
+  });
+
+  it.each([-61 * 60_000, 3 * 60_000])('rejects camera capture outside the fresh window (%s ms)', async offset => {
+    await assertFails(enqueue('invalid-camera-capture', trainV3('camera', { selfieCapturedAt: capturedAt(offset) })));
+  });
+
+  it('rejects a camera capture after selection even when both are fresh', async () => {
+    const selected = capturedAt();
+    await assertFails(enqueue('capture-after-selection', trainV3('camera', {
+      selfieSelectedAt: selected, selfieCapturedAt: firebase.firestore.Timestamp.fromMillis(selected.toMillis() + 1000),
+    })));
+  });
+
+  it.each([null, 'unknown', 123456789])('forbids capture-time field on uploaded references even when its value is %s', async selfieCapturedAt => {
+    await assertFails(enqueue('upload-claims-capture', trainV3('upload', { selfieCapturedAt })));
+  });
+
+  it('rejects uploaded references with a forged fresh capture timestamp', async () => {
+    await assertFails(enqueue('upload-forged-capture', trainV3('upload', { selfieCapturedAt: capturedAt() })));
+  });
+
+  it.each(['camera', 'upload'] as const)('keeps owner, batch and photo-slot boundaries for %s references', async source => {
+    for (const selfiePath of [selfiePathFor(BOB), selfiePathFor(ALICE, SECOND_UPLOAD_ID), paths()[0]]) {
+      await assertFails(enqueue('wrong-reference-owner', trainV3(source, { selfiePath })));
+    }
+    await assertFails(enqueue('wrong-uid', trainV3(source, { uid: BOB })));
+    await assertFails(enqueue('wrong-photo-count', trainV3(source, { photoPaths: paths().slice(0, 7) })));
+    await assertFails(enqueue('extra-field', trainV3(source, { referenceCapturedAt: capturedAt() })));
+    await assertFails(enqueue('forged-submission-time', trainV3(source, { createdAt: capturedAt(-30_000) })));
+  });
+
+  it('keeps reference source and selection immutable and preserves one active job per user', async () => {
+    await assertSucceeds(enqueue('camera-first', trainV3('camera')));
+    await assertFails(enqueue('upload-second', trainV3('upload')));
+    await assertFails(dbFor().doc('jobs/camera-first').update({ selfieSource: 'upload' }));
+    await assertFails(dbFor().doc('jobs/camera-first').update({ selfieSelectedAt: capturedAt() }));
+  });
+});
+
+describe('Generation requirements', () => {
+  it.each([2, 3])('accepts version %s generation with a server-ready identity and active garment', async requestVersion => {
+    await seedProfile(ALICE, { identity: { status: 'ready', version: 'trained' } });
+    await seed({ 'garments/coat-1': { active: true } });
+    await assertSucceeds(enqueue('generation', generate({ requestVersion })));
+  });
+
+  it.each([1, 4, '2', '3', 2.5, 3.5, null, true])('rejects new generation request version %s', async requestVersion => {
     await seedProfile(ALICE, { identity: { status: 'ready', version: 'trained' } });
     await seed({ 'garments/coat-1': { active: true } });
     await assertFails(enqueue('wrong-generation-version', generate({ requestVersion })));
