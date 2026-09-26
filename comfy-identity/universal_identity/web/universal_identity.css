@@ -1,0 +1,95 @@
+.universal-identity-panel {
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    min-width: 0;
+    height: 100%;
+    overflow: auto;
+    padding: 12px;
+    border: 1px solid var(--border-color, #454545);
+    border-radius: 8px;
+    background: var(--comfy-menu-bg, #242424);
+    color: var(--input-text, #e5e5e5);
+    font: 12px/1.4 system-ui, sans-serif;
+}
+.universal-identity-panel *,
+.universal-identity-panel *::before,
+.universal-identity-panel *::after { box-sizing: border-box; }
+.universal-identity-panel [hidden] { display: none !important; }
+.universal-identity-panel button,
+.universal-identity-panel input,
+.universal-identity-panel select {
+    font: inherit;
+    color: inherit;
+}
+.universal-identity-panel button {
+    border: 1px solid var(--border-color, #555);
+    border-radius: 5px;
+    padding: 7px 10px;
+    cursor: pointer;
+    background: var(--comfy-input-bg, #333);
+}
+.universal-identity-panel button:hover:not(:disabled) { filter: brightness(1.15); }
+.universal-identity-panel button:disabled { opacity: .5; cursor: default; }
+.universal-identity-panel :focus-visible { outline: 2px solid #a3c2ff; outline-offset: 2px; }
+.universal-identity-panel input[type="text"],
+.universal-identity-panel input[type="number"],
+.universal-identity-panel select {
+    min-width: 0;
+    padding: 7px 8px;
+    border: 1px solid var(--border-color, #555);
+    border-radius: 5px;
+    background: var(--comfy-input-bg, #333);
+}
+.identity-heading,
+.identity-training { display: flex; align-items: center; justify-content: space-between; gap: 9px; }
+.identity-heading strong { font-size: 14px; }
+.identity-saved-person { display: flex; align-items: center; gap: 8px; }
+.identity-saved-person span { white-space: nowrap; font-size: 11px; }
+.identity-saved-person select { flex: 1; width: 0; text-overflow: ellipsis; }
+.identity-upload { display: flex; flex-direction: column; gap: 7px; }
+.identity-upload .identity-secondary { width: 100%; }
+.identity-profile-title { margin-top: 2px; font-size: 13px; overflow-wrap: anywhere; }
+.identity-muted { color: var(--descrip-text, #b5b5b5); font-size: 11px; }
+.identity-gallery {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    align-content: start;
+    gap: 8px;
+    min-height: 120px;
+    max-height: 260px;
+    overflow: auto;
+    flex: 1 1 220px;
+    padding: 2px;
+    overscroll-behavior: contain;
+}
+.identity-empty { grid-column: 1 / -1; align-self: center; padding: 20px 8px; text-align: center; color: #b5b5b5; }
+.identity-photo { min-width: 0; border: 2px solid transparent; border-radius: 6px; overflow: hidden; }
+.identity-photo-reference { border-color: #8cadf2; }
+.identity-photo-excluded img { opacity: .4; }
+.universal-identity-panel .identity-photo-preview {
+    position: relative;
+    width: 100%;
+    height: 100px;
+    padding: 0;
+    border: 0;
+    border-radius: 3px;
+    overflow: hidden;
+    background: #151515;
+}
+.identity-photo-preview img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.identity-photo-preview:disabled { opacity: 1 !important; }
+.identity-reference-badge { position: absolute; right: 3px; bottom: 3px; padding: 2px 5px; background: #254d91; color: white; border-radius: 3px; font-size: 10px; }
+.identity-photo-caption { display: flex; align-items: center; gap: 4px; padding: 3px 1px; min-width: 0; }
+.identity-photo-caption input { flex: none; accent-color: #8cadf2; }
+.identity-photo-caption span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 10px; }
+.identity-steps { display: flex; align-items: center; gap: 6px; font-size: 11px; }
+.identity-steps input { width: 76px; }
+.universal-identity-panel .identity-primary { background: #375f9e; border-color: #6689c0; color: #fff; font-weight: 600; }
+.identity-status { font-size: 11px; overflow-wrap: anywhere; }
+.identity-progress { width: 100%; height: 8px; accent-color: #8cadf2; flex: none; }
+.identity-error { padding: 8px; border: 1px solid #a96666; border-radius: 4px; background: #542f2f; color: #ffd7d7; overflow-wrap: anywhere; }
+.identity-details { font-size: 11px; }
+.identity-details summary { cursor: pointer; color: var(--descrip-text, #b5b5b5); }
+.identity-details pre { margin: 6px 0 0; padding: 7px; max-height: 130px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: #191919; border-radius: 4px; font: 10px/1.4 ui-monospace, monospace; }

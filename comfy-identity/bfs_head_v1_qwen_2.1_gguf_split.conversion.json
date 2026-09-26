@@ -1,0 +1,13 @@
+{
+  "source": "C:\\Users\\maxvl\\OneDrive\\Desktop\\DesktopFolder\\HackGT\\comfy-identity\\bfs-model\\bfs_head_v1_qwen_2.1.safetensors",
+  "destination": "C:\\Users\\maxvl\\OneDrive\\Desktop\\DesktopFolder\\HackGT\\comfy-identity\\bfs_head_v1_qwen_2.1_gguf_split.safetensors",
+  "source_sha256": "facf18a8c4c2f62578c034fc4e7cbdb964c63fb2d678fe0d3d41677fba3d0606",
+  "destination_sha256": "9d427b784df2589a92c9c62114503d77073f167940b5ffcba331f1fab609ec77",
+  "original_tensor_count": 384,
+  "converted_tensor_count": 448,
+  "split_modules": 32,
+  "unchanged_tensors_verified": 320,
+  "exact_split_reconstruction_verified": true,
+  "numeric_rescaling": false,
+  "device": "cpu"
+}

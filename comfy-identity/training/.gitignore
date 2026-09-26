@@ -1,0 +1,9 @@
+.venv/
+.uv-cache/
+diffusers-source/
+models/
+outputs/
+dataset/
+dataset-contact-sheet.jpg
+__pycache__/
+*.log

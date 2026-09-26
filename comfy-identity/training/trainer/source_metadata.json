@@ -1,0 +1,17 @@
+{
+  "script_path": "examples/dreambooth/train_dreambooth_lora_qwenimage21.py",
+  "fetched_at_utc": "2026-09-26T15:31:48.6082100Z",
+  "commit": "e0abab83b5df05de9e7abd788643c1a7c1e42e28",
+  "repository": "https://github.com/huggingface/diffusers",
+  "script_sha256": "26e5bdcc58fbbee6c9c0ba107b6efda5a7a7a9e6aff700089cf2b8b5652662e7",
+  "script_last_commit": "e0118ade2f60234c41bacf40330a7e2f61108849",
+  "adapted_script_sha256": "9ec7a0915deb0600a96784505089bed110a29f54f1f60ec9ddb31d4aa2eb3739",
+  "adaptations": [
+    "BF16 CPU text preprocessing, or optional NF4 GPU text preprocessing, before loading the NF4 DiT",
+    "Free text pipeline and encoder references before DiT allocation",
+    "Cached latents on CPU, current batch transferred to GPU",
+    "Local files and offline execution required; no external trackers or uploads",
+    "Finite gradient and LoRA-B change checks with saved adapter verification",
+    "No automatic validation generation or checkpoint deletion"
+  ]
+}

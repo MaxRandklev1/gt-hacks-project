@@ -1,0 +1,194 @@
+{
+  "1": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "Qwen_image_2.1_00008.png"
+    },
+    "_meta": {
+      "title": "1 - BODY / POSE / CLOTHES (base image)"
+    }
+  },
+  "2": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "Screenshot 2026-09-22 014339.png"
+    },
+    "_meta": {
+      "title": "2 - PERSON / FACE (identity reference)"
+    }
+  },
+  "3": {
+    "class_type": "UnetLoaderGGUF",
+    "inputs": {
+      "unet_name": "qwen-image-2.1-Q8_0.gguf"
+    },
+    "_meta": {
+      "title": "Qwen Image 2.1 - installed Q8 model"
+    }
+  },
+  "4": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "lora_name": "bfs_head_v1_qwen_2.1_gguf_split.safetensors",
+      "strength_model": 1.0,
+      "model": [
+        "3",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "BFS Head V1 - Qwen 2.1 identity LoRA"
+    }
+  },
+  "5": {
+    "class_type": "QwenImage21Cache",
+    "inputs": {
+      "device": "auto",
+      "dtype": "default",
+      "model": [
+        "14",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Reference cache"
+    }
+  },
+  "6": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen3vl_8b_int8_convrot.safetensors",
+      "type": "qwen_image",
+      "device": "default"
+    },
+    "_meta": {
+      "title": "Qwen 3 VL - existing text encoder"
+    }
+  },
+  "7": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "qwen_image_2.1_vae_bf16.safetensors"
+    },
+    "_meta": {
+      "title": "Qwen Image 2.1 VAE"
+    }
+  },
+  "8": {
+    "class_type": "TextEncodeQwenImage21",
+    "inputs": {
+      "prompt": "head_swap: Edit <image1> to show j0n_person, the person from <image2>, while preserving the neutral facial expression of <image1>.\nExpression comes from <image1>: a calm, relaxed, neutral face, lips gently closed, mouth corners at rest, no visible teeth, relaxed cheeks, naturally relaxed eyelids and eyebrows. Match the mouth closure, gaze, eyebrow position and cheek tension of <image1>. The final face is neutral and closed-mouth, not smiling or grinning. Do not transfer the broad smile, raised cheeks, wide eyes or expression from <image2>.\nUse <image2> only for j0n_person's recognizable identity: facial proportions and bone structure, eye shape, nose, lips, hair, beard, age and natural skin tone. Reconstruct his identity with the neutral expression, original head rotation, tilt, gaze direction, placement, natural scale and neck connection of <image1>.\nPreserve the body shape, pose, clothing, garment edges and folds, accessories, camera angle, framing, lighting and background from <image1>. Harmonize every exposed skin region, including face, ears, neck, shoulders, chest, arms and hands, to the same person's natural skin tone under the original lighting. Preserve realistic skin texture and shading; do not copy the reference photo's color cast, clothing, background or pose.\nThe finished portrait retains <image1>'s quiet neutral expression with closed lips and no teeth, together with j0n_person's identity. Sharp facial detail and a natural hairline and jaw-to-neck transition.",
+      "negative_prompt": "",
+      "resolution": 0,
+      "clip": [
+        "6",
+        0
+      ],
+      "vae": [
+        "7",
+        0
+      ],
+      "images.image_1": [
+        "1",
+        0
+      ],
+      "images.image_2": [
+        "2",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "3 - Keep image 1 neutral expression; use Jon identity"
+    }
+  },
+  "9": {
+    "class_type": "KSampler",
+    "inputs": {
+      "seed": 42,
+      "steps": 40,
+      "cfg": 1.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1.0,
+      "model": [
+        "5",
+        0
+      ],
+      "positive": [
+        "8",
+        0
+      ],
+      "negative": [
+        "8",
+        1
+      ],
+      "latent_image": [
+        "8",
+        2
+      ]
+    },
+    "_meta": {
+      "title": "4 - Quality render (40 steps)"
+    }
+  },
+  "10": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "9",
+        0
+      ],
+      "vae": [
+        "7",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Decode result"
+    }
+  },
+  "11": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "Qwen21_Jon/identity_neutral",
+      "images": [
+        "10",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "5 - Saved identity + skin result"
+    }
+  },
+  "12": {
+    "class_type": "ImageCompare",
+    "inputs": {
+      "image_a": [
+        "1",
+        0
+      ],
+      "image_b": [
+        "10",
+        0
+      ],
+      "compare_view": ""
+    },
+    "_meta": {
+      "title": "Original / result comparison"
+    }
+  },
+  "14": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "model": [
+        "4",
+        0
+      ],
+      "lora_name": "Jon_Qwen21_rank16_step400.safetensors",
+      "strength_model": 0.8
+    },
+    "_meta": {
+      "title": "Jon identity LoRA - likeness strength"
+    }
+  }
+}

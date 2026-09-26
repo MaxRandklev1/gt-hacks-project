@@ -1,0 +1,430 @@
+{
+  "1": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "Qwen_image_2.1_00008.png"
+    },
+    "_meta": {
+      "title": "1 - BASE: body, clothing, pose and scene"
+    }
+  },
+  "3": {
+    "class_type": "UnetLoaderGGUF",
+    "inputs": {
+      "unet_name": "qwen-image-2.1-Q8_0.gguf"
+    },
+    "_meta": {
+      "title": "Qwen Image 2.1 - installed Q8 model"
+    }
+  },
+  "4": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "lora_name": "bfs_head_v1_qwen_2.1_gguf_split.safetensors",
+      "strength_model": 0.65,
+      "model": [
+        "3",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Head-swap strength (texture / transfer balance)"
+    }
+  },
+  "5": {
+    "class_type": "QwenImage21Cache",
+    "inputs": {
+      "device": "auto",
+      "dtype": "default",
+      "model": [
+        "14",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Reference cache"
+    }
+  },
+  "6": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen3vl_8b_int8_convrot.safetensors",
+      "type": "qwen_image",
+      "device": "default"
+    },
+    "_meta": {
+      "title": "Qwen 3 VL - existing text encoder"
+    }
+  },
+  "7": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "qwen_image_2.1_vae_bf16.safetensors"
+    },
+    "_meta": {
+      "title": "Qwen Image 2.1 VAE"
+    }
+  },
+  "8": {
+    "class_type": "TextEncodeQwenImage21",
+    "inputs": {
+      "prompt": [
+        "15",
+        0
+      ],
+      "negative_prompt": "",
+      "resolution": 0,
+      "clip": [
+        "6",
+        0
+      ],
+      "vae": [
+        "7",
+        0
+      ],
+      "images.image_1": [
+        "1",
+        0
+      ],
+      "images.image_2": [
+        "14",
+        1
+      ]
+    },
+    "_meta": {
+      "title": "Encode inputs - resolution 0 keeps base size"
+    }
+  },
+  "9": {
+    "class_type": "KSampler",
+    "inputs": {
+      "seed": 42,
+      "steps": 80,
+      "cfg": 1.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1.0,
+      "model": [
+        "5",
+        0
+      ],
+      "positive": [
+        "8",
+        0
+      ],
+      "negative": [
+        "8",
+        1
+      ],
+      "latent_image": [
+        "8",
+        2
+      ]
+    },
+    "_meta": {
+      "title": "4 - Render quality: 80 steps"
+    }
+  },
+  "10": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "9",
+        0
+      ],
+      "vae": [
+        "7",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Decode result"
+    }
+  },
+  "11": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "Universal_Identity/result",
+      "images": [
+        "10",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "5 - Saved identity + skin result"
+    }
+  },
+  "12": {
+    "class_type": "ImageCompare",
+    "inputs": {
+      "image_a": [
+        "1",
+        0
+      ],
+      "image_b": [
+        "10",
+        0
+      ],
+      "compare_view": ""
+    },
+    "_meta": {
+      "title": "Original / result comparison"
+    }
+  },
+  "14": {
+    "class_type": "UniversalIdentityProfile",
+    "inputs": {
+      "model": [
+        "4",
+        0
+      ],
+      "profile_id": "jon-76c0fab59a20",
+      "reference_index": 0,
+      "identity_strength": 0.8,
+      "use_trained_identity": true
+    },
+    "_meta": {
+      "title": "2 - PERSON: upload photos, choose reference, train once"
+    }
+  },
+  "15": {
+    "class_type": "UniversalIdentityPrompt",
+    "inputs": {
+      "edit_instructions": "head_swap: Use <image1> as the base. Replace the head's identity with the person shown in <image2>. Take recognizable facial anatomy and appearance from <image2>, while preserving the head position, scale, rotation, gaze and facial expression of <image1>.\nExpression comes from <image1>: match its mouth opening, lip position, mouth corners, cheek tension, eyelids and eyebrows. Reconstruct the reference identity with that expression, rather than copying the expression from <image2>.\nPreserve <image1>'s body shape, pose, clothing, accessories, framing, lighting and background. Match exposed skin to the reference person's underlying skin tone while retaining local shadows, highlights and natural color variation.\nPreserve natural skin texture, fine facial detail and visible age-related features. Retain the base image's rendering style. For photographic inputs, match its sharpness and subtle grain. Avoid smoothing, beauty retouching, waxy skin and artificial sharpening. Keep a natural transition between the head and neck.",
+      "expression_mode": "Neutral (closed mouth)",
+      "expression_details": "",
+      "identity_instruction": [
+        "14",
+        3
+      ]
+    },
+    "_meta": {
+      "title": "3 - Reusable edit instructions & expression"
+    }
+  },
+  "16": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "texture_fix_vae_for_qwen_image_2.1_bf16.safetensors"
+    },
+    "_meta": {
+      "title": "PASS 2 - Texture-fix VAE"
+    }
+  },
+  "17": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "9",
+        0
+      ],
+      "vae": [
+        "16",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "First-pass latent / texture-fix decode"
+    }
+  },
+  "18": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "Universal_Identity_TwoPass/fixed_vae_only",
+      "images": [
+        "17",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "BASELINE - Fixed VAE only"
+    }
+  },
+  "19": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "lora_name": "elusarcas-qwen2-1-detailer-v1_gguf_split.safetensors",
+      "strength_model": 0.2,
+      "model": [
+        "3",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "PASS 2 - Detailer strength (clean model)"
+    }
+  },
+  "20": {
+    "class_type": "QwenImage21Cache",
+    "inputs": {
+      "device": "auto",
+      "dtype": "default",
+      "model": [
+        "19",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "PASS 2 - Independent reference cache"
+    }
+  },
+  "21": {
+    "class_type": "TextEncodeQwenImage21",
+    "inputs": {
+      "negative_prompt": "",
+      "resolution": 0,
+      "prompt": "enhance this image. Use <image1> as the complete visual reference. Preserve the exact person's identity, facial anatomy and proportions, head position, gaze, mouth shape and facial expression. Preserve their underlying skin tone and melanin-related coloration, age-related features, hairstyle and existing distinctive features.\nPreserve the body, pose, clothing, accessories, framing, lighting and background. Keep the same image dimensions and composition.\nReduce excessive glossy or waxy skin smoothing while retaining natural highlights and local shadows. Restore subtle, realistic tonal variation and natural texture supported by the image. Keep detail restrained and consistent with the image's original sharpness and grain. Do not invent freckles, blemishes, scars or additional wrinkles, and do not add exaggerated or sharpened pores. Avoid beauty retouching, skin lightening, oversharpening and changes to facial structure.",
+      "clip": [
+        "6",
+        0
+      ],
+      "vae": [
+        "16",
+        0
+      ],
+      "images.image_1": [
+        "17",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "PASS 2 - Texture edit / preserve this identity"
+    }
+  },
+  "22": {
+    "class_type": "KSampler",
+    "inputs": {
+      "seed": 42,
+      "steps": 40,
+      "cfg": 1.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 0.04,
+      "model": [
+        "20",
+        0
+      ],
+      "positive": [
+        "21",
+        0
+      ],
+      "negative": [
+        "21",
+        1
+      ],
+      "latent_image": [
+        "9",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "PASS 2 - Subtle texture pass / denoise 0.04"
+    }
+  },
+  "23": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "22",
+        0
+      ],
+      "vae": [
+        "16",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "PASS 2 - Final texture-fix decode"
+    }
+  },
+  "27": {
+    "class_type": "LoadBackgroundRemovalModel",
+    "inputs": {
+      "bg_removal_name": "birefnet.safetensors"
+    },
+    "_meta": {
+      "title": "Subject mask - BiRefNet"
+    }
+  },
+  "28": {
+    "class_type": "RemoveBackground",
+    "inputs": {
+      "bg_removal_model": [
+        "27",
+        0
+      ],
+      "image": [
+        "17",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Find subject in clean baseline"
+    }
+  },
+  "29": {
+    "class_type": "ImageCompositeMasked",
+    "inputs": {
+      "x": 0,
+      "y": 0,
+      "resize_source": false,
+      "destination": [
+        "17",
+        0
+      ],
+      "source": [
+        "23",
+        0
+      ],
+      "mask": [
+        "28",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Refined subject + clean background"
+    }
+  },
+  "30": {
+    "class_type": "MaskPreview",
+    "inputs": {
+      "mask": [
+        "28",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Subject mask - white receives refinement"
+    }
+  },
+  "24": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "Universal_Identity_TwoPass/final",
+      "images": [
+        "29",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "FINAL - Refined subject / clean background"
+    }
+  },
+  "25": {
+    "class_type": "ImageCompare",
+    "inputs": {
+      "compare_view": "",
+      "image_a": [
+        "17",
+        0
+      ],
+      "image_b": [
+        "29",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "COMPARE - Clean baseline / refined subject"
+    }
+  }
+}

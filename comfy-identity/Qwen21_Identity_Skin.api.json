@@ -1,0 +1,180 @@
+{
+  "1": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "Qwen_image_2.1_00008.png"
+    },
+    "_meta": {
+      "title": "1 - BODY / POSE / CLOTHES (base image)"
+    }
+  },
+  "2": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "Screenshot 2026-09-22 014339.png"
+    },
+    "_meta": {
+      "title": "2 - PERSON / FACE (identity reference)"
+    }
+  },
+  "3": {
+    "class_type": "UnetLoaderGGUF",
+    "inputs": {
+      "unet_name": "qwen-image-2.1-Q8_0.gguf"
+    },
+    "_meta": {
+      "title": "Qwen Image 2.1 - installed Q8 model"
+    }
+  },
+  "4": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "lora_name": "bfs_head_v1_qwen_2.1.safetensors",
+      "strength_model": 1.0,
+      "model": [
+        "3",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "BFS Head V1 - Qwen 2.1 identity LoRA"
+    }
+  },
+  "5": {
+    "class_type": "QwenImage21Cache",
+    "inputs": {
+      "device": "auto",
+      "dtype": "default",
+      "model": [
+        "4",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Reference cache"
+    }
+  },
+  "6": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen3vl_8b_int8_convrot.safetensors",
+      "type": "qwen_image",
+      "device": "default"
+    },
+    "_meta": {
+      "title": "Qwen 3 VL - existing text encoder"
+    }
+  },
+  "7": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "qwen_image_2.1_vae_bf16.safetensors"
+    },
+    "_meta": {
+      "title": "Qwen Image 2.1 VAE"
+    }
+  },
+  "8": {
+    "class_type": "TextEncodeQwenImage21",
+    "inputs": {
+      "prompt": "head_swap: start with <image1> as the base image. Replace the person's head with the identity from <image2>, faithfully preserving the reference person's facial structure, eyes, nose, mouth, hair, beard, age and recognizable features. Reconstruct that identity in the original head rotation, tilt, gaze direction and facial expression of <image1>. Keep the original head placement, natural scale and neck connection. Use <image2> for identity and natural skin tone, while retaining the lighting and image style of <image1>.\nMake every exposed skin region belong to the same person: harmonize the face, ears, neck, shoulders, chest, arms, hands and any visible legs to the reference person's natural skin tone, with consistent undertones and realistic shading under the original lighting. Keep skin texture and anatomical details natural. Do not copy the reference photograph's color cast, clothing, background, pose or expression.\nPreserve the body shape, pose, clothing, garment edges, folds, accessories, camera angle, framing and background from <image1>. Only change the identity of the head and the color of exposed skin. Sharp facial detail, seamless hairline and jaw-to-neck transition.",
+      "negative_prompt": "",
+      "resolution": 0,
+      "clip": [
+        "6",
+        0
+      ],
+      "vae": [
+        "7",
+        0
+      ],
+      "images.image_1": [
+        "1",
+        0
+      ],
+      "images.image_2": [
+        "2",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "3 - Identity + exposed-skin instruction"
+    }
+  },
+  "9": {
+    "class_type": "KSampler",
+    "inputs": {
+      "seed": 42,
+      "steps": 40,
+      "cfg": 1.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1.0,
+      "model": [
+        "5",
+        0
+      ],
+      "positive": [
+        "8",
+        0
+      ],
+      "negative": [
+        "8",
+        1
+      ],
+      "latent_image": [
+        "8",
+        2
+      ]
+    },
+    "_meta": {
+      "title": "4 - Quality render (40 steps)"
+    }
+  },
+  "10": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "9",
+        0
+      ],
+      "vae": [
+        "7",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Decode result"
+    }
+  },
+  "11": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "Qwen21_Identity/identity_skin",
+      "images": [
+        "10",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "5 - Saved identity + skin result"
+    }
+  },
+  "12": {
+    "class_type": "ImageCompare",
+    "inputs": {
+      "image_a": [
+        "1",
+        0
+      ],
+      "image_b": [
+        "10",
+        0
+      ],
+      "compare_view": ""
+    },
+    "_meta": {
+      "title": "Original / result comparison"
+    }
+  }
+}

@@ -1,0 +1,71 @@
+# Machine credentials and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+/comfy-identity/universal_identity/config.json
+/comfy-identity/universal-default-profile.json
+
+# User-supplied identity photos and garment inputs remain on this machine.
+/Jon/
+/ClothesSwap/
+
+# Downloaded weights, environments and checkpoints are not Git source.
+*.safetensors
+*.gguf
+*.pth
+*.pt
+*.ckpt
+*.bin
+.venv/
+venv/
+.cache/
+.uv-cache/
+.dc/
+__pycache__/
+*.py[cod]
+node_modules/
+.pytest_cache/
+.ruff_cache/
+/comfy-identity/training/diffusers-source/
+/comfy-identity/training/models/
+/comfy-identity/training/dataset/
+/comfy-identity/training/profiles/
+/comfy-identity/training/outputs/
+/comfy-identity/training/trainer/dataset_test_cache/
+/comfy-identity/realism-assets/
+/comfy-identity/upscale-assets/
+
+# Local experiments and run records; keep their authored scripts.
+*.log
+*.tmp
+/comfy-identity/*-comparisons*/
+/comfy-identity/tryon-results/
+/comfy-identity/*history*.json
+/comfy-identity/*submission*.json
+/comfy-identity/*validation*.json
+/comfy-identity/*-job.json
+/comfy-identity/run*.json
+/comfy-identity/object_info*.json
+/comfy-identity/training/*health.json
+/comfy-identity/training/dataset-manifest.json
+/comfy-identity/training/requirements.freeze.txt
+
+# Raw media and bulk outputs. Curated, metadata-stripped demos are versioned.
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.avif
+*.mp4
+*.mov
+!/docs/demo/*.png
+!/docs/demo/*.jpg
+
+# Local publication tooling and packaging reports
+/.local/
+.DS_Store
+Thumbs.db

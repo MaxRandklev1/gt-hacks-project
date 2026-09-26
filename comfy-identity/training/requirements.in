@@ -1,0 +1,16 @@
+# Training environment only; do not install into ComfyUI's environment.
+# Install torch/torchvision first from https://download.pytorch.org/whl/cu130.
+# Run the installer from this training directory.
+# Official Diffusers source is pinned to the revision reviewed with the trainer:
+# https://github.com/huggingface/diffusers/archive/e0abab83b5df05de9e7abd788643c1a7c1e42e28.zip
+# A shorter local source path avoids Windows path-length failures during build.
+./diffusers-source
+transformers>=5.17
+accelerate
+peft>=0.14
+datasets
+bitsandbytes==0.50.2
+Pillow
+numpy
+safetensors
+huggingface_hub
