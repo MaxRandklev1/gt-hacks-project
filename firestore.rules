@@ -1,0 +1,64 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function owner(uid) { return request.auth != null && request.auth.uid == uid; }
+    function validMeasurements(data) {
+      return data.heightCm is number && data.heightCm >= 80 && data.heightCm <= 250
+        && data.weightKg is number && data.weightKg >= 25 && data.weightKg <= 300;
+    }
+    function userFields() { return ['displayName','email','photoURL','heightCm','weightKg','consentVersion','consentAt','createdAt','updatedAt']; }
+    function validUser(data) {
+      return data.displayName is string && data.displayName.size() <= 200
+        && data.email is string && data.email.size() <= 320
+        && data.photoURL is string && data.photoURL.size() <= 2000
+        && data.updatedAt == request.time
+        && ((!('heightCm' in data) && !('weightKg' in data)) || validMeasurements(data))
+        && (!('consentVersion' in data) || (data.consentVersion == 'identity-training-v1' && data.consentAt is timestamp));
+    }
+    match /users/{uid} {
+      allow read: if owner(uid);
+      allow create: if owner(uid) && request.resource.data.keys().hasOnly(userFields())
+        && validUser(request.resource.data) && request.resource.data.createdAt == request.time;
+      allow update: if owner(uid) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(userFields())
+        && request.resource.data.createdAt == resource.data.createdAt && validUser(request.resource.data);
+      match /generations/{id} { allow read: if owner(uid); }
+      match /queue/{queueId} {
+        allow read: if owner(uid);
+        function newJob() { return getAfter(/databases/$(database)/documents/jobs/$(request.resource.data.jobId)).data; }
+        function validLock() {
+          return queueId == 'current' && request.resource.data.keys().hasOnly(['jobId','updatedAt'])
+            && request.resource.data.jobId is string && request.resource.data.updatedAt == request.time
+            && newJob().uid == uid && newJob().status == 'queued' && newJob().createdAt == request.time;
+        }
+        allow create: if owner(uid) && validLock();
+        allow update: if owner(uid) && validLock()
+          && get(/databases/$(database)/documents/jobs/$(resource.data.jobId)).data.status in ['completed','failed'];
+      }
+    }
+    match /garments/{garmentId} { allow read: if request.auth != null && resource.data.active == true; }
+    match /jobs/{jobId} {
+      allow read: if owner(resource.data.uid);
+      function profile() { return getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data; }
+      function photoPath(slot) { return 'users/' + request.auth.uid + '/uploads/' + request.resource.data.uploadId + '/' + slot + '.jpg'; }
+      function trainRequest(data) {
+        return data.keys().hasOnly(['uid','kind','status','requestVersion','createdAt','uploadId','photoPaths'])
+          && data.uploadId is string && data.uploadId.matches('^[a-zA-Z0-9_-]{1,80}$')
+          && data.photoPaths is list && data.photoPaths.size() == 8
+          && data.photoPaths == [photoPath('0'),photoPath('1'),photoPath('2'),photoPath('3'),photoPath('4'),photoPath('5'),photoPath('6'),photoPath('7')]
+          && validMeasurements(profile()) && profile().consentVersion == 'identity-training-v1';
+      }
+      function generationRequest(data) {
+        return data.keys().hasOnly(['uid','kind','status','requestVersion','createdAt','garmentId'])
+          && data.garmentId is string && data.garmentId.matches('^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$')
+          && get(/databases/$(database)/documents/garments/$(data.garmentId)).data.active == true
+          && profile().identity.status == 'ready';
+      }
+      allow create: if request.auth != null && owner(request.resource.data.uid)
+        && request.resource.data.requestVersion == 1 && request.resource.data.status == 'queued'
+        && request.resource.data.createdAt == request.time
+        && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)/queue/current).data.jobId == jobId
+        && ((request.resource.data.kind == 'train' && trainRequest(request.resource.data))
+          || (request.resource.data.kind == 'generate' && generationRequest(request.resource.data)));
+    }
+  }
+}

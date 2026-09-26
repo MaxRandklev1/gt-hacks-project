@@ -1,8 +1,26 @@
-# GT Hacks project
+# THREAD — GT Hacks virtual try-on
 
-A local virtual try-on prototype built with ComfyUI and Qwen Image 2.1. Give it a pose image, a person's photo profile, and a garment reference; it generates that person wearing the garment in the base pose, refines the foreground, and optionally exports a 4096 × 4096 image.
+**Live app: [gt-hacks-thread-2026.firebaseapp.com](https://gt-hacks-thread-2026.firebaseapp.com)** · **[Printable demo shirt tag](docs/tags/demo-shirt.html)**
 
-The project currently works on **still images**. It combines reusable identity training, editable ComfyUI workflows, and local inference. No cloud inference service is required.
+THREAD is a deployed virtual try-on web app backed by Firebase and a local ComfyUI/Qwen Image 2.1 GPU worker. A garment QR code opens its item in the app. The implemented onboarding flow collects Google sign-in, eight photos, measurements and training consent; the worker selects five usable photos and trains a reusable personal identity adapter. Later try-ons reuse that identity and save both the original and 4096 × 4096 result to the account's private history.
+
+The project currently works on **still images**. Firebase hosts the app, authentication, queue and private assets; inference and training run on the local PC. The base pose and body come from the catalog image, so the result is a visual preview rather than a clothing-fit measurement. Firebase Storage was selected after the user enabled billing. A separately operated Linux storage/server deployment remains a future option.
+
+## Run the deployed demo
+
+Open the [app](https://gt-hacks-thread-2026.firebaseapp.com), or print [docs/tags/demo-shirt.html](docs/tags/demo-shirt.html) at actual size with its QR border intact. The tag links to the demo garment; a new account retains that selection through onboarding. Training and rendering take minutes, so prepare a demo account in advance when possible.
+
+Keep the **GPU PC, ComfyUI and local worker online**. On the configured Windows machine, start ComfyUI, then run this from the repository root:
+
+```powershell
+.\scripts\start-worker.ps1
+```
+
+The script checks readiness before starting the worker and avoids starting a second copy. Use `-CheckOnly` to check without launching it; logs are under ignored `.local/`. First-time setup and credential requirements are in the [worker guide](services/worker/README.md); the app's data flow and deployment configuration are in [APP_ARCHITECTURE.md](docs/APP_ARCHITECTURE.md).
+
+**Validation status:** deployment, the live garment catalog, worker startup and readiness checks are verified. **95 JavaScript/rules tests, 30 worker tests and 11 photo-selector tests passed.** The user verified live Google sign-in. A real eight-photo upload passed validation, selected five photos and completed 400 training steps, making the account's identity ready in about **6 minutes 50 seconds including queue time**.
+
+The first live generation saved its 1024-pixel render, then failed because the upscaler received RGBA instead of RGB. Both 4K workflow graphs now explicitly remove alpha before upscaling. An operator recovery reused that saved render and ran only the RGB upscale; the 1024 × 1024 and 4096 × 4096 PNGs were saved to the original account's private cloud paths, and its job/history were atomically marked completed. Training and diffusion were not rerun. **The patched full graph has not yet been rerun from start to finish without recovery.**
 
 ## What works
 
@@ -95,6 +113,6 @@ The tested refinement preset is deliberately subtle: denoise **0.04**, Detail En
 
 ## Repository boundaries
 
-Versioned work includes workflow JSONs/API graphs, the profile-node frontend/backend, builders and verification scripts, the reviewed trainer adaptation, documentation, and selected demo exports. Original photo libraries, local profile datasets, trained checkpoints, downloaded model weights, virtual environments, caches, logs, bulk render outputs, credentials, and machine-specific configuration stay local and are excluded from commits.
+Versioned work includes the web app, Firebase rules, local worker, workflow JSONs/API graphs, the profile-node frontend/backend, builders and verification scripts, the reviewed trainer adaptation, documentation, and selected demo exports. Private photos, personal LoRAs, local profile datasets, trained checkpoints, downloaded model weights, virtual environments, caches, logs, bulk render outputs, credentials, and machine-specific configuration are excluded from Git. App photos, personal adapters and generated results use owner-scoped private Firebase Storage paths; local training and inference also retain working files on the GPU PC.
 
 The detailed guides record the tested path and earlier experiments: [try-on](comfy-identity/TRYON_README.md), [profiles](comfy-identity/UNIVERSAL_IDENTITY_README.md), [refinement](comfy-identity/TWO_PASS_REALISM_README.md), [upscaling](comfy-identity/UPSCALE_4K_README.md), and [training](comfy-identity/training/trainer/README.md).

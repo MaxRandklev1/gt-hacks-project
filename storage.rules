@@ -1,0 +1,15 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function owner(uid) { return request.auth != null && request.auth.uid == uid; }
+    match /users/{uid}/uploads/{uploadId}/{filename} {
+      allow read: if owner(uid);
+      allow create: if owner(uid) && resource == null && uploadId.matches('^[a-zA-Z0-9_-]{1,80}$')
+        && filename.matches('^[0-7]\\.jpg$') && request.resource.size > 0
+        && request.resource.size <= 20 * 1024 * 1024 && request.resource.contentType == 'image/jpeg';
+    }
+    match /users/{uid}/generations/{generationId}/{filename} { allow read: if owner(uid); }
+    match /users/{uid}/identity/{version}/{filename} { allow read: if owner(uid); }
+    match /garments/{garmentId}/{filename} { allow read: if request.auth != null; }
+  }
+}

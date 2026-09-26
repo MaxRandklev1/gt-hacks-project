@@ -17,6 +17,18 @@
       "title": "4x upscale model"
     }
   },
+  "6": {
+    "class_type": "SplitImageWithAlpha",
+    "inputs": {
+      "image": [
+        "1",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "RGB input / remove alpha before upscale"
+    }
+  },
   "3": {
     "class_type": "ImageUpscaleWithModel",
     "inputs": {
@@ -25,7 +37,7 @@
         0
       ],
       "image": [
-        "1",
+        "6",
         0
       ]
     },

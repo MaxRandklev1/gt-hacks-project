@@ -69,3 +69,17 @@ node_modules/
 /.local/
 .DS_Store
 Thumbs.db
+
+# Web build, Firebase local state, and cloud credentials
+/web/dist/
+/.firebase/
+firebase-debug*.log
+firestore-debug*.log
+ui-debug*.log
+*-service-account.json
+service-account*.json
+application_default_credentials.json
+/services/worker/.state/
+/services/worker/.venv/
+/services/worker/.worker-cache/
+!/web/public/demo/*.png

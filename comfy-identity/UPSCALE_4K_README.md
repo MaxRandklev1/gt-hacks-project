@@ -9,6 +9,14 @@ Default upscaler: **4xNomosUniDAT_otf**. It enlarges the final 1024 × 1024 try-
 
 The node uses the model's 4× scale and preserves aspect ratio. This fixed square base produces 4096 × 4096; changing the upstream dimensions changes the resulting dimensions proportionally.
 
+Both workflows explicitly send RGB pixels to the three-channel upscaler through the native `SplitImageWithAlpha` node. In the full graph, composite node 29 feeds node 37, whose image output 0 feeds upscaler 34. In the standalone graph, input 1 feeds node 6, whose image output 0 feeds upscaler 3. The separate alpha-mask output is unused. This preserves the RGB channels and prevents an RGBA tensor from reaching the upscaler.
+
+## Live recovery verification
+
+On September 26, 2026, a live cloud try-on rendered its original image successfully but failed at upscaler node 34 because the composited tensor had four channels and the model expected three. Recovery reused the existing rendered node-24 output, converted it to RGB and ran only the upscale stage. The 1024 × 1024 RGB result and 4096 × 4096 PNG were published to the original account's private generation history; the 4K PNG was 18,000,378 bytes. No diffusion stages were rerun.
+
+The builder and both UI/API workflow pairs now contain the RGB boundary. Graph checks and the worker regression test verify that the upscaler consumes image output 0 rather than the alpha mask. The running cloud worker loads its API graph once at startup, so restart it when idle after updating the export. The recovery verifies the RGB-input upscale and publication path; it does not represent a fresh rerun of the entire revised diffusion graph.
+
 ## Local comparison and assets
 
 Both candidate upscalers successfully produced 4096 × 4096 PNGs from the exact saved final image. Matched face and shirt crops are retained under `tryon-results/`. Visual review preferred Nomos for finer hair and more natural skin/eye detail. The original 1024 image remains unchanged.

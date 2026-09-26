@@ -70,14 +70,16 @@ class Graph:
         self.nodes[target]["inputs"][target_slot]["link"] = self.next_link
         self.api[str(target)]["inputs"][target_name] = [str(source), source_slot]
 
-    def upscale(self, model_id, upscale_id, image_id, position):
+    def upscale(self, model_id, upscale_id, image_id, position, rgb_id):
         x, y = position
         self.add(model_id, "UpscaleModelLoader", "4x upscale model", [x, y], [440, 100],
                  [("model_name", "COMBO")], [("UPSCALE_MODEL", "UPSCALE_MODEL")], {"model_name": UPSCALER})
+        self.add(rgb_id, "SplitImageWithAlpha", "RGB input / remove alpha before upscale", [x, y + 120], [440, 70],
+                 [("image", "IMAGE")], [("IMAGE", "IMAGE"), ("MASK", "MASK")])
         self.add(upscale_id, "ImageUpscaleWithModel", "Upscale 4x / preserve aspect ratio", [x + 510, y], [410, 100],
                  [("upscale_model", "UPSCALE_MODEL"), ("image", "IMAGE")], [("IMAGE", "IMAGE")])
         self.connect(model_id, 0, upscale_id, "upscale_model")
-        self.connect(image_id, 0, upscale_id, "image")
+        self.connect(image_id, 0, rgb_id, "image")
 
     def save(self, stem):
         link_ids = {link[0] for link in self.workflow["links"]}
@@ -91,18 +93,50 @@ class Graph:
         for node in self.nodes.values():
             for output in node.get("outputs", []):
                 assert set(output.get("links") or []).issubset(link_ids)
-        self.workflow.update(id=str(uuid.uuid4()), revision=0,
+        # Preserve the user's existing editor layout and stable workflow identity.
+        # API inputs and port links still come entirely from the generated graph.
+        previous_path = ROOT / f"{stem}.json"
+        previous_text = previous_path.read_text(encoding="utf-8-sig") if previous_path.exists() else ""
+        previous = json.loads(previous_text) if previous_text else {}
+        previous_nodes = {node["id"]: node for node in previous.get("nodes", [])}
+        next_order = max((node.get("order", 0) for node in previous_nodes.values()), default=-1) + 1
+        for node in self.workflow["nodes"]:
+            old = previous_nodes.get(node["id"])
+            if old and old["type"] == node["type"]:
+                for field in ("pos", "size", "order"):
+                    if field in old:
+                        node[field] = copy.deepcopy(old[field])
+                for field in ("widgets_values", "widgets_values_named"):
+                    if not node.get(field) and field not in old:
+                        node.pop(field, None)
+            elif previous_nodes:
+                node["order"] = next_order
+                next_order += 1
+        previous_order = {node["id"]: index for index, node in enumerate(previous.get("nodes", []))}
+        self.workflow["nodes"].sort(key=lambda node: previous_order.get(node["id"], len(previous_order)))
+        previous_groups = {group["id"]: group for group in previous.get("groups", [])}
+        for group in self.workflow["groups"]:
+            old = previous_groups.get(group["id"])
+            if old and "font_size" not in old:
+                group.pop("font_size", None)
+        for field in ("extra", "config"):
+            if field in previous:
+                self.workflow[field] = copy.deepcopy(previous[field])
+        self.workflow.update(id=previous.get("id") or str(uuid.uuid4()), revision=previous.get("revision", 0),
                              last_node_id=max(self.nodes), last_link_id=self.next_link)
         for suffix, data in [(".json", self.workflow), (".api.json", self.api)]:
-            (ROOT / f"{stem}{suffix}").write_text(json.dumps(data, indent=2), encoding="utf-8")
+            compact = suffix == ".json" and previous_text and "\n" not in previous_text.strip()
+            text = json.dumps(data, separators=(",", ":")) if compact else json.dumps(data, indent=2)
+            (ROOT / f"{stem}{suffix}").write_text(text, encoding="utf-8", newline="\n")
 
 
 full = Graph(copy.deepcopy(source_workflow), copy.deepcopy(source_api))
-assert not ({33, 34, 35, 36} & full.nodes.keys()), "Upscale IDs already exist in the source"
-full.upscale(33, 34, 29, [30, 3930])
+assert not ({33, 34, 35, 36, 37} & full.nodes.keys()), "Upscale IDs already exist in the source"
+full.upscale(33, 34, 29, [30, 3930], rgb_id=37)
 full.clone(24, 35, "FINAL 4K - Saved 4x try-on", [1110, 3930], [1120, 1000])
 full.widgets(35, {"filename_prefix": "Universal_TryOn/final_4K"})
 full.connect(34, 0, 35, "images")
+full.connect(37, 0, 34, "image")
 full.clone(13, 36, "4x upscale - no additional sampling", [30, 4140], [970, 280])
 full.widgets(36, {"text": """# Stage 3 - Final 4x upscale
 The composited final image from stage 2 is enlarged with 4xNomosUniDAT. A 1024 x 1024 input becomes 4096 x 4096; other aspect ratios are retained at four times the width and height.
@@ -113,7 +147,8 @@ full.workflow["groups"].append({"id": max(group["id"] for group in full.workflow
                                "color": "#705c80", "font_size": 28, "flags": {}})
 assert all(full.api[node_id] == original for node_id, original in source_api.items())
 assert full.workflow["links"][:len(source_workflow["links"])] == source_workflow["links"]
-assert full.api["34"]["inputs"]["image"] == ["29", 0]
+assert full.api["37"]["inputs"]["image"] == ["29", 0]
+assert full.api["34"]["inputs"]["image"] == ["37", 0]
 assert full.api["24"] == source_api["24"]
 full.save(FULL_STEM)
 
@@ -122,10 +157,11 @@ only = Graph({"id": "", "revision": 0, "last_node_id": 0, "last_link_id": 0,
               "extra": {"ds": {"scale": 0.70, "offset": [60, 80]}}, "version": 0.4}, {})
 only.clone(1, 1, "INPUT - Existing finished image", [30, 40], [440, 550])
 only.widgets(1, {"image": "tryon_final_1024.png", "upload": "image"})
-only.upscale(2, 3, 1, [540, 40])
+only.upscale(2, 3, 1, [540, 40], rgb_id=6)
 only.clone(24, 4, "FINAL 4K - Upscaled existing image", [1510, 40], [800, 940])
 only.widgets(4, {"filename_prefix": "Universal_TryOn/upscaled_existing_4K"})
 only.connect(3, 0, 4, "images")
+only.connect(6, 0, 3, "image")
 only.clone(13, 5, "Upscale an existing image", [540, 240], [900, 280])
 only.widgets(5, {"text": """# Enlarge an existing finished image
 Upload a completed image on the left, then Run. This workflow only loads the 4x upscaler and enlarges that image; it does not run the 80-step identity/garment pass or the 40-step refinement pass.
@@ -135,11 +171,13 @@ only.workflow["groups"] = [{"id": 1, "title": "Existing image - 4x upscale only"
                             "bounding": [0, -30, 2370, 1070], "color": "#705c80",
                             "font_size": 28, "flags": {}}]
 assert {node["class_type"] for node in only.api.values()} == {
-    "LoadImage", "UpscaleModelLoader", "ImageUpscaleWithModel", "SaveImage"}
+    "LoadImage", "SplitImageWithAlpha", "UpscaleModelLoader", "ImageUpscaleWithModel", "SaveImage"}
+assert only.api["6"]["inputs"]["image"] == ["1", 0]
+assert only.api["3"]["inputs"]["image"] == ["6", 0]
 only.save(ONLY_STEM)
 print(json.dumps({"full": str(ROOT / f"{FULL_STEM}.json"), "full_api": str(ROOT / f"{FULL_STEM}.api.json"),
                   "upscale_only": str(ROOT / f"{ONLY_STEM}.json"),
                   "upscale_only_api": str(ROOT / f"{ONLY_STEM}.api.json"),
-                  "full_node_ids": {"model": 33, "upscale": 34, "save": 35, "note": 36},
-                  "upscale_only_node_ids": {"image": 1, "model": 2, "upscale": 3, "save": 4, "note": 5},
-                  "validation": "Existing graph preserved; both upscale paths verified without model execution"}, indent=2))
+                  "full_node_ids": {"model": 33, "rgb": 37, "upscale": 34, "save": 35, "note": 36},
+                  "upscale_only_node_ids": {"image": 1, "model": 2, "rgb": 6, "upscale": 3, "save": 4, "note": 5},
+                  "validation": "Existing graph preserved; both upscale paths explicitly use RGB output without model execution"}, indent=2))
