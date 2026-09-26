@@ -15,6 +15,7 @@ vi.mock('firebase/firestore', () => ({
   getFirestore: () => ({}), doc: (_: unknown, ...parts: string[]) => parts.join('/'), collection: vi.fn(),
   onSnapshot: vi.fn(), query: vi.fn(), where: vi.fn(), orderBy: vi.fn(), limit: vi.fn(),
   getDoc: mocks.getDoc, runTransaction: mocks.transaction, serverTimestamp: () => 'timestamp', connectFirestoreEmulator: vi.fn(),
+  Timestamp: { fromMillis: (value: number) => ({ captureMillis: value }) },
 }));
 vi.mock('firebase/storage', () => ({
   getStorage: () => ({}), ref: (_: unknown, path: string) => path,
@@ -98,14 +99,38 @@ describe('Authentication return and account boundaries', () => {
     let upload = 0;
     mocks.upload.mockImplementation(() => ({ on: (_event: string, progress: (snapshot: unknown) => void, _error: unknown, complete: () => void) => {
       progress({ bytesTransferred: 1, totalBytes: 1 });
-      if (++upload === 8) mocks.auth.currentUser = userB;
+      if (++upload === 9) mocks.auth.currentUser = userB;
       complete();
     } }));
     const { submitOnboarding } = await import('../web/src/lib/client');
     mocks.auth.currentUser = userA;
     const photos = Array.from({ length: 8 }, (_, i) => new File([`photo${i}`], `photo${i}.jpg`, { type: 'image/jpeg' }));
-    await expect(submitOnboarding({ heightCm: 175, weightKg: 70, photos, consent: true })).rejects.toThrow(/account changed/i);
-    expect(mocks.upload).toHaveBeenCalledTimes(8);
+    const selfie = new File(['selfie'], 'live-selfie.jpg', { type: 'image/jpeg' });
+    await expect(submitOnboarding({ heightCm: 175, weightKg: 70, measurementSystem: 'us', photos, selfie, selfieCapturedAt: Date.now(), consent: true })).rejects.toThrow(/account changed/i);
+    expect(mocks.upload).toHaveBeenCalledTimes(9);
     expect(mocks.transaction).not.toHaveBeenCalled();
+  });
+
+  it('uploads the selfie separately and pins the current capture as the training request reference', async () => {
+    vi.stubGlobal('createImageBitmap', vi.fn(async () => ({ width: 512, height: 512, close: vi.fn() })));
+    let photo = 0;
+    vi.stubGlobal('document', { createElement: () => ({ getContext: () => ({ drawImage: vi.fn() }), toBlob: (done: (blob: Blob) => void) => done(new Blob([`unique-photo-${photo++}`])) }) });
+    mocks.upload.mockImplementation(() => ({ on: (_event: string, _progress: unknown, _error: unknown, complete: () => void) => complete() }));
+    const write = vi.fn();
+    mocks.transaction.mockImplementation(async (_db, update) => update({ get: async () => ({ exists: () => false }), set: write }));
+    mocks.auth.currentUser = userA;
+    const photos = Array.from({ length: 8 }, (_, i) => new File([`photo${i}`], `photo${i}.jpg`, { type: 'image/jpeg' }));
+    const selfie = new File(['current-look'], 'selfie.jpg', { type: 'image/jpeg' });
+    const capturedAt = Date.now();
+    const { submitOnboarding } = await import('../web/src/lib/client');
+    await submitOnboarding({ heightCm: 175, weightKg: 70, measurementSystem: 'us', photos, selfie, selfieCapturedAt: capturedAt, consent: true });
+    expect(mocks.upload).toHaveBeenCalledTimes(9);
+    const selfiePath = mocks.upload.mock.calls[8][0];
+    expect(selfiePath).toMatch(/^users\/account-a\/uploads\/[a-f0-9-]+\/selfie\.jpg$/);
+    const job = write.mock.calls.map(call => call[1]).find(data => data.kind === 'train');
+    expect(job).toMatchObject({ requestVersion: 2, uid: userA.uid, selfiePath, selfieCapturedAt: { captureMillis: capturedAt } });
+    expect(job.photoPaths).toHaveLength(8);
+    expect(job.photoPaths).not.toContain(selfiePath);
+    expect(write.mock.calls.some(call => call[1].measurementSystem === 'us')).toBe(true);
   });
 });

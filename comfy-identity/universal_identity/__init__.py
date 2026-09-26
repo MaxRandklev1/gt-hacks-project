@@ -34,9 +34,7 @@ class UniversalIdentityProfile:
         try:
             if MANAGER.active_job():
                 return "Identity training is using the GPU. Wait for completion before generating."
-            photos = selected_photos(STORE.load(profile_id))
-            if not 0 <= reference_index < len(photos):
-                return "Reference index must identify one of the selected photos (starting at 0)."
+            STORE.reference_path(STORE.load(profile_id), reference_index)
         except (OSError, ValueError, KeyError) as error:
             return str(error)
         return True
@@ -46,8 +44,10 @@ class UniversalIdentityProfile:
         try:
             profile = STORE.load(profile_id)
             adapter = STORE.adapter_path(profile)
+            reference = STORE.reference_path(profile, kwargs.get("reference_index", 0))
             return ((STORE.profile_dir(profile_id) / "profile.json").stat().st_mtime_ns,
-                    adapter.stat().st_mtime_ns if adapter else None)
+                    adapter.stat().st_mtime_ns if adapter else None, reference.stat().st_mtime_ns,
+                    (profile.get("inference_reference") or {}).get("sha256"))
         except (OSError, ValueError):
             return float("nan")
 
@@ -58,10 +58,7 @@ class UniversalIdentityProfile:
         import torch
         from PIL import Image
         profile = STORE.load(profile_id)
-        photos = selected_photos(profile)
-        if not 0 <= reference_index < len(photos):
-            raise ValueError("Choose a valid selected reference photo index.")
-        with Image.open(STORE.photo_path(profile, photos[reference_index]["id"])) as image:
+        with Image.open(STORE.reference_path(profile, reference_index)) as image:
             image_tensor = torch.from_numpy(np.asarray(image.convert("RGB"), dtype=np.float32) / 255.0).unsqueeze(0)
         adapter = STORE.adapter_path(profile) if use_trained_identity and identity_strength > 0 else None
         if adapter is not None:

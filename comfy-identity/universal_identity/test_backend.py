@@ -1,5 +1,7 @@
 """CPU-only tests; never launch the trainer, import torch, or access user photos."""
 import json
+import hashlib
+import importlib.util
 import os
 from pathlib import Path
 import tempfile
@@ -55,6 +57,65 @@ class ProfileTests(unittest.TestCase):
         profile = self.make_profile()
         self.assertTrue(profile["photos"][0]["selected"])
         self.assertTrue(any("small" in warning for warning in data_warnings(profile)))
+
+    def test_live_selfie_reference_is_separate_and_never_falls_back(self):
+        profile = self.make_profile(count=5)
+        original_photos = json.loads(json.dumps(profile["photos"]))
+        profile["cloud_identity"] = {"uid": "alice", "version": "run1"}
+        profile["inference_reference_required"] = True
+        with self.assertRaises(ProfileError):
+            self.store.reference_path(profile, 0)
+        path = self.store.profile_dir(profile["id"]) / "cloud-reference/reference.png"
+        path.parent.mkdir()
+        Image.new("RGB", (320, 480), "red").save(path)
+        profile["inference_reference"] = {"source": "live_selfie", "filename": "cloud-reference/reference.png",
+            "owner": profile["cloud_identity"], "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+        self.assertEqual(self.store.reference_path(profile, 0), path)
+        self.assertEqual(self.store.reference_path(profile, 4), path)
+        self.assertEqual(profile["photos"], original_photos)
+        self.assertEqual(len(selected_photos(profile)), 5)
+        profile["inference_reference"]["owner"] = {"uid": "bob", "version": "run1"}
+        with self.assertRaises(ProfileError):
+            self.store.reference_path(profile, 0)
+        profile["inference_reference"]["owner"] = profile["cloud_identity"]
+        path.write_bytes(b"changed")
+        with self.assertRaises(ProfileError):
+            self.store.reference_path(profile, 0)
+
+    def test_legacy_reference_selection_still_works(self):
+        profile = self.make_profile(count=2)
+        self.assertEqual(self.store.reference_path(profile, 1), self.store.photo_path(profile, "p0001"))
+
+    def test_identity_node_emits_selfie_pixels_with_no_selected_training_photos(self):
+        import numpy as np
+        from unittest.mock import Mock
+        profile = self.make_profile()
+        profile["photos"][0]["selected"] = False
+        profile["cloud_identity"] = {"uid": "alice", "version": "run1"}
+        profile["inference_reference_required"] = True
+        path = self.store.profile_dir(profile["id"]) / "cloud-reference/reference.png"
+        path.parent.mkdir()
+        Image.new("RGB", (320, 480), "red").save(path)
+        profile["inference_reference"] = {"source": "live_selfie", "filename": "cloud-reference/reference.png",
+            "owner": profile["cloud_identity"], "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+        self.store.save(profile)
+        name = "identity_node_selfie_test"
+        spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name("__init__.py"),
+                                                      submodule_search_locations=[str(Path(__file__).parent)])
+        module = importlib.util.module_from_spec(spec)
+        # Stub only the tensor boundary: this test must not import torch/CUDA or ComfyUI.
+        tensor = lambda array: SimpleNamespace(unsqueeze=lambda axis: np.expand_dims(array, axis))
+        with patch.dict(sys.modules, {name: module, "server": SimpleNamespace(PromptServer=SimpleNamespace(instance=None)),
+                                      "torch": SimpleNamespace(from_numpy=tensor)}):
+            spec.loader.exec_module(module)
+            module.STORE = self.store
+            module.MANAGER = Mock()
+            module.MANAGER.active_job.return_value = None
+            result = module.UniversalIdentityProfile().apply_identity(object(), profile["id"], 0, 0, False)
+            image = result["result"][1]
+            self.assertEqual(image.shape, (1, 480, 320, 3))
+            self.assertTrue(np.all(image[..., 0] == 1.0))
+            self.assertTrue(np.all(image[..., 1:] == 0.0))
 
     def test_traversal_and_adapter_escape_rejected(self):
         with self.assertRaises(ProfileError):

@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 from contextlib import ExitStack
 import json
+import hashlib
 from pathlib import Path
 import re
 import time
@@ -166,10 +167,40 @@ class LocalProfiles:
         temporary.write_text(json.dumps(profile, indent=2), encoding="utf-8")
         temporary.replace(path)
 
-    def mark_owner(self, profile_id, uid, version):
+    def mark_owner(self, profile_id, uid, version, *, require_selfie=False):
         directory, profile = self.read(profile_id)
         profile["cloud_identity"] = {"uid": uid, "version": version}
+        if require_selfie:
+            profile["inference_reference_required"] = True
         self.save(directory, profile)
+
+    def bind_reference(self, profile_id, uid, version, data):
+        directory, profile = self.read(profile_id)
+        if profile.get("cloud_identity") != {"uid": uid, "version": version}:
+            raise ValueError("Reference owner does not match the local profile.")
+        path = contained(directory, "cloud-reference/reference.png")
+        path.parent.mkdir(exist_ok=True)
+        temporary = path.with_name(".reference-" + uuid.uuid4().hex + ".tmp")
+        temporary.write_bytes(data)
+        temporary.replace(path)
+        profile["inference_reference_required"] = True
+        profile["inference_reference"] = {"source": "live_selfie", "filename": "cloud-reference/reference.png",
+                                          "sha256": hashlib.sha256(data).hexdigest(),
+                                          "owner": {"uid": uid, "version": version}}
+        self.save(directory, profile)
+
+    def verify_reference(self, profile_id, uid, version, expected_hash):
+        directory, profile = self.read(profile_id)
+        reference = profile.get("inference_reference") or {}
+        owner = {"uid": uid, "version": version}
+        if (profile.get("cloud_identity") != owner or profile.get("inference_reference_required") is not True
+                or reference.get("source") != "live_selfie" or reference.get("owner") != owner
+                or reference.get("filename") != "cloud-reference/reference.png" or reference.get("sha256") != expected_hash):
+            raise ValueError("The cached profile is missing its required live-selfie reference.")
+        path = contained(directory, reference["filename"])
+        if not path.is_file() or path.stat().st_size > 20 * 1024 * 1024 or hashlib.sha256(path.read_bytes()).hexdigest() != expected_hash:
+            raise ValueError("The cached live-selfie reference failed integrity validation.")
+        return path
 
     def adapter(self, profile_id, uid, version):
         directory, profile = self.read(profile_id)
@@ -183,18 +214,26 @@ class LocalProfiles:
             raise ValueError("Local trained adapter is missing.")
         return adapter, profile
 
-    def restore(self, profile_id, uid, manifest, adapter_bytes):
+    def restore(self, profile_id, uid, manifest, adapter_bytes, reference_bytes=None):
         directory, profile = self.read(profile_id)
         trigger = manifest.get("trigger")
         if not isinstance(trigger, str) or not re.fullmatch(r"[A-Za-z0-9_]{1,100}", trigger):
             raise ValueError("Invalid identity trigger in saved manifest.")
+        selfie = manifest.get("schemaVersion") == 2
+        if selfie and (manifest.get("referenceSource") != "live_selfie" or reference_bytes is None
+                       or hashlib.sha256(reference_bytes).hexdigest() != manifest.get("referenceSha256")):
+            raise ValueError("Restoring this identity requires its verified live-selfie reference.")
         adapter = contained(directory, "cloud-import/adapter.safetensors")
         adapter.parent.mkdir(exist_ok=True)
         adapter.write_bytes(adapter_bytes)
         profile["trigger"] = trigger
         for photo in profile["photos"]:
             photo["caption"] = f"photo of {trigger}, a person"
+            if selfie:
+                photo["selected"] = False  # The restore reference is not a training dataset.
         profile["cloud_identity"] = {"uid": uid, "version": manifest["version"]}
         profile["latest_successful"] = {"adapter_relative": "cloud-import/adapter.safetensors", "steps": 400}
         profile["training"] = {"status": "completed", "job_id": None}
         self.save(directory, profile)
+        if selfie:
+            self.bind_reference(profile_id, uid, manifest["version"], reference_bytes)

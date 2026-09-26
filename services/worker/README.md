@@ -70,9 +70,10 @@ The Firebase hostname above is this deployment's canonical app/auth origin; subs
 
 ## Job contract
 
-The frontend creates `jobs/{jobId}` with `uid`, `kind`, `status: queued`, `requestVersion: 1` and `createdAt`. The worker checks the account's `consentVersion: identity-training-v1` and `consentAt` before any GPU work.
+The frontend creates `jobs/{jobId}` with `uid`, `kind`, `status: queued`, `requestVersion: 2` and `createdAt`. The worker checks the account's `consentVersion: identity-training-v1` and `consentAt` before any GPU work. Existing version-1 generation requests remain supported; version-1 training requests must return to onboarding and capture a selfie.
 
-- **Train:** `uploadId` is a canonical UUID. `photoPaths` must contain exactly `users/{uid}/uploads/{uploadId}/0.jpg` through `7.jpg`, in that order. The selector reviews all eight and chooses five distinct usable photos. Selection is a documented [quality heuristic](PHOTO_SELECTION.md), not proof that all photos show the same person. An insufficient set fails with replacement guidance.
+- **Train:** `uploadId` is a canonical UUID. `photoPaths` must contain exactly `users/{uid}/uploads/{uploadId}/0.jpg` through `7.jpg`, in that order. The separate mandatory `selfiePath` is `users/{uid}/uploads/{uploadId}/selfie.jpg`; `selfieCapturedAt` must be a timestamp within one hour before or two minutes after the job's `createdAt`. Capture time is checked against submission, so queue delay does not invalidate a request. The selfie must decode and pass a local clear-single-face check; there is no fallback if it is missing or unsuitable. This quality heuristic and timestamp do not prove liveness or identity.
+- **Training selection:** The selector reviews only the eight uploaded photos and chooses five distinct usable ones. The live selfie is excluded from that dataset and remains the inference reference. Selection is a documented [quality heuristic](PHOTO_SELECTION.md), not proof that all photos show the same person. An insufficient set fails with replacement guidance.
 - **Generate:** `garmentId` selects an active admin-managed catalog entry. Its two input paths must be `garments/{garmentId}/reference.png` and `garments/{garmentId}/base.png`. The wearer comes only from the requesting account's ready identity. Height/weight do not alter the fixed base body's proportions or establish physical fit.
 
 Training creates a fresh local profile from the five chosen photos, marks it as owned by this UID/version, and starts exactly **400 updates** through the existing local profile API. Progress and all eight selection records appear in `users/{uid}.identity`. Successful training saves these private Storage objects:
@@ -83,7 +84,11 @@ users/{uid}/identity/{trainingJobId}/reference.png
 users/{uid}/identity/{trainingJobId}/manifest.json
 ```
 
-The manifest records owner UID, version, original training trigger, selected-photo paths, local profile ID and adapter/reference hashes. If that local profile is missing on a later worker, the worker checks ownership and hashes, creates a local profile from the saved reference, imports the adapter inside that profile, and restores the original trigger. Another account's existing local profile is never adopted.
+New schema-2 manifests record owner UID, version, original training trigger, selected-photo paths, local profile ID and adapter/reference hashes, plus `referenceSource: live_selfie`, `referenceSourcePath` and the capture timestamp. Their `reference.png` is always the normalized selfie. A dedicated `cloud-reference/reference.png` file and owner/hash metadata on the local profile keep it separate from the five selected training photos. The Comfy identity node resolves that reference regardless of its training-photo reference-index widget; missing or changed selfie data fails instead of falling back.
+
+If that local profile is missing or its cached reference fails validation, the worker restores the original saved selfie and trained adapter into a fresh profile, preserving the training trigger. Its restore-only photo is unselected so it does not become a training dataset. Another account's existing local profile is never adopted. Legacy schema-1 identities retain their existing selected-photo reference behavior and do not require a forced migration.
+
+Deploy this capability by copying the authored `comfy-identity/universal_identity/backend.py` and `__init__.py` into the installed extension, then restarting ComfyUI and the worker when idle. The schema-2 worker checks the extension's reported live-selfie reference support before submitting generation.
 
 Generation patches only the reviewed graph's pose/garment inputs, profile selection, and output prefixes. It keeps the existing generation, refinement, mask and upscale settings. It reads final nodes **24** (base size) and **35** (4×), strips image metadata, and writes:
 

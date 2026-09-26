@@ -6,13 +6,14 @@ service cloud.firestore {
       return data.heightCm is number && data.heightCm >= 80 && data.heightCm <= 250
         && data.weightKg is number && data.weightKg >= 25 && data.weightKg <= 300;
     }
-    function userFields() { return ['displayName','email','photoURL','heightCm','weightKg','consentVersion','consentAt','createdAt','updatedAt']; }
+    function userFields() { return ['displayName','email','photoURL','heightCm','weightKg','measurementSystem','consentVersion','consentAt','createdAt','updatedAt']; }
     function validUser(data) {
       return data.displayName is string && data.displayName.size() <= 200
         && data.email is string && data.email.size() <= 320
         && data.photoURL is string && data.photoURL.size() <= 2000
         && data.updatedAt == request.time
         && ((!('heightCm' in data) && !('weightKg' in data)) || validMeasurements(data))
+        && (!('measurementSystem' in data) || data.measurementSystem in ['us','metric'])
         && (!('consentVersion' in data) || (data.consentVersion == 'identity-training-v1' && data.consentAt is timestamp));
     }
     match /users/{uid} {
@@ -41,10 +42,14 @@ service cloud.firestore {
       function profile() { return getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data; }
       function photoPath(slot) { return 'users/' + request.auth.uid + '/uploads/' + request.resource.data.uploadId + '/' + slot + '.jpg'; }
       function trainRequest(data) {
-        return data.keys().hasOnly(['uid','kind','status','requestVersion','createdAt','uploadId','photoPaths'])
-          && data.uploadId is string && data.uploadId.matches('^[a-zA-Z0-9_-]{1,80}$')
+        return data.keys().hasOnly(['uid','kind','status','requestVersion','createdAt','uploadId','photoPaths','selfiePath','selfieCapturedAt'])
+          && data.uploadId is string && data.uploadId.matches('^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
           && data.photoPaths is list && data.photoPaths.size() == 8
           && data.photoPaths == [photoPath('0'),photoPath('1'),photoPath('2'),photoPath('3'),photoPath('4'),photoPath('5'),photoPath('6'),photoPath('7')]
+          && data.selfiePath == photoPath('selfie')
+          && data.selfieCapturedAt is timestamp
+          && data.selfieCapturedAt >= request.time - duration.value(1, 'h')
+          && data.selfieCapturedAt <= request.time + duration.value(2, 'm')
           && validMeasurements(profile()) && profile().consentVersion == 'identity-training-v1';
       }
       function generationRequest(data) {
@@ -54,7 +59,8 @@ service cloud.firestore {
           && profile().identity.status == 'ready';
       }
       allow create: if request.auth != null && owner(request.resource.data.uid)
-        && request.resource.data.requestVersion == 1 && request.resource.data.status == 'queued'
+        && request.resource.data.requestVersion is int && request.resource.data.requestVersion == 2
+        && request.resource.data.status == 'queued'
         && request.resource.data.createdAt == request.time
         && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)/queue/current).data.jobId == jobId
         && ((request.resource.data.kind == 'train' && trainRequest(request.resource.data))

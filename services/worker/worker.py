@@ -24,9 +24,11 @@ from PIL import Image, ImageOps
 try:
     from .comfy import ComfyClient, ComfyError, LocalProfiles, patch_graph, safe_id
     from .photo_selection import select_best_photos
+    from .selfie import validate_selfie
 except ImportError:
     from comfy import ComfyClient, ComfyError, LocalProfiles, patch_graph, safe_id
     from photo_selection import select_best_photos
+    from selfie import validate_selfie
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -80,9 +82,11 @@ def failed_identity(uid, version, message, previous=None):
 def validate_job(job_id, job):
     safe_id(job_id)
     uid = safe_id(job.get("uid"))
-    if type(job.get("requestVersion")) is not int or job["requestVersion"] != 1 or job.get("kind") not in {"train", "generate"}:
+    if type(job.get("requestVersion")) is not int or job["requestVersion"] not in {1, 2} or job.get("kind") not in {"train", "generate"}:
         raise JobError("Unsupported job request. Reload the app and submit again.")
     if job["kind"] == "train":
+        if job["requestVersion"] != 2:
+            raise JobError("Reload onboarding and capture a live selfie before training.")
         upload_id = job.get("uploadId")
         try:
             if not isinstance(upload_id, str) or str(uuid.UUID(upload_id)) != upload_id:
@@ -92,6 +96,13 @@ def validate_job(job_id, job):
         expected = [f"users/{uid}/uploads/{upload_id}/{index}.jpg" for index in range(8)]
         if job.get("photoPaths") != expected:
             raise JobError("Training needs exactly eight photos from this account's upload.")
+        if job.get("selfiePath") != f"users/{uid}/uploads/{upload_id}/selfie.jpg":
+            raise JobError("Capture a live selfie for this account's current upload before training.")
+        capture, created = job.get("selfieCapturedAt"), job.get("createdAt")
+        if (not isinstance(capture, datetime) or capture.utcoffset() is None
+                or not isinstance(created, datetime) or created.utcoffset() is None
+                or not created - timedelta(hours=1) <= capture <= created + timedelta(minutes=2)):
+            raise JobError("The selfie capture timestamp is missing or invalid. Retake it and submit again.")
     else:
         safe_id(job.get("garmentId"))
     return uid
@@ -291,9 +302,10 @@ class Lease:
 
 
 class Worker:
-    def __init__(self, store, comfy, profiles, template, state_dir, selector=select_best_photos):
+    def __init__(self, store, comfy, profiles, template, state_dir, selector=select_best_photos, selfie_validator=validate_selfie):
         self.store, self.comfy, self.profiles = store, comfy, profiles
         self.template, self.state_dir, self.selector = template, Path(state_dir), selector
+        self.selfie_validator = selfie_validator
         self.state_dir.mkdir(parents=True, exist_ok=True)
 
     def run_job(self, job_id, job):
@@ -333,6 +345,15 @@ class Worker:
         lease.write({"stage": "selecting", "message": "Choosing five clear, varied photos from your eight uploads.",
                      "progress": 0.05, "previousIdentity": previous_identity},
                     user_fields={"identity": identity, "trainingJobId": job_id})
+        lease.guard()
+        selfie = clean_image(self.store.download(job["selfiePath"], MAX_IMAGE_BYTES), folder / "live-selfie.png")
+        try:
+            self.selfie_validator(selfie)
+        except ValueError as error:
+            raise JobError(str(error)[:800]) from None
+        reference_data = selfie.read_bytes()
+        if len(reference_data) > MAX_IMAGE_BYTES:
+            raise JobError("The normalized selfie exceeds 20 MiB. Retake it at a lower resolution.")
         paths = []
         for index, storage_path in enumerate(job["photoPaths"]):
             lease.guard()
@@ -356,7 +377,8 @@ class Worker:
         lease.guard()
         profile = self.comfy.create_profile("cloud-" + sha256(uid.encode())[:12] + "-" + job_id[:20], clean)
         profile_id = safe_id(profile["id"])
-        self.profiles.mark_owner(profile_id, uid, job_id)
+        self.profiles.mark_owner(profile_id, uid, job_id, require_selfie=True)
+        self.profiles.bind_reference(profile_id, uid, job_id, reference_data)
         identity |= {"status": "training", "profileId": profile_id, "selectedPhotos": selection, "updatedAt": now()}
         lease.write({"stage": "training", "message": "Training your identity for 400 steps.", "progress": 0.15,
                      "localProfileId": profile_id}, user_fields={"identity": identity})
@@ -374,10 +396,11 @@ class Worker:
         if adapter.stat().st_size > MAX_ADAPTER_BYTES:
             raise JobError("The trained adapter exceeds the supported size.")
         adapter_data = adapter.read_bytes()
-        reference_data, _ = clean_output(self.comfy.photo(profile_id, profile["photos"][0]["id"]))
         destinations = identity_paths(uid, job_id)
-        manifest = {"schemaVersion": 1, "uid": uid, "version": job_id, "profileId": profile_id,
+        manifest = {"schemaVersion": 2, "uid": uid, "version": job_id, "profileId": profile_id,
                     "trigger": local["trigger"], "steps": 400, "selectedPhotos": selection,
+                    "referenceSource": "live_selfie", "referenceSourcePath": job["selfiePath"],
+                    "selfieCapturedAt": job["selfieCapturedAt"].isoformat(),
                     **destinations, "adapterSha256": sha256(adapter_data), "referenceSha256": sha256(reference_data)}
         lease.write({"stage": "saving", "message": "Saving your private identity adapter.", "progress": 0.95})
         for key, data, content_type in [("adapterPath", adapter_data, "application/octet-stream"),
@@ -385,7 +408,8 @@ class Worker:
                                         ("manifestPath", json.dumps(manifest).encode(), "application/json")]:
             lease.guard()
             self.store.upload(destinations[key], data, content_type)
-        identity |= {"status": "ready", **destinations, "updatedAt": now()}
+        identity |= {"status": "ready", **destinations, "referenceSource": "live_selfie",
+                     "referenceSourcePath": job["selfiePath"], "selfieCapturedAt": job["selfieCapturedAt"], "updatedAt": now()}
         lease.write({"status": "completed", "stage": "ready", "message": "Your identity is ready.", "progress": 1.0},
                     user_fields={"identity": identity})
 
@@ -397,15 +421,31 @@ class Worker:
         if any(identity.get(key) != path for key, path in expected.items()):
             raise JobError("The saved identity does not match this account. Train it again.")
         manifest = json.loads(self.store.download(expected["manifestPath"], 1024 * 1024))
-        if (manifest.get("schemaVersion") != 1 or manifest.get("uid") != uid or manifest.get("version") != version
+        if (type(manifest.get("schemaVersion")) is not int or manifest["schemaVersion"] not in {1, 2}
+                or manifest.get("uid") != uid or manifest.get("version") != version
                 or manifest.get("steps") != 400 or any(manifest.get(key) != path for key, path in expected.items())):
             raise JobError("The saved identity manifest failed ownership validation.")
+        selfie = manifest["schemaVersion"] == 2
+        if selfie:
+            source = manifest.get("referenceSourcePath")
+            match = re.fullmatch(re.escape(f"users/{uid}/uploads/") + r"([0-9a-f-]{36})/selfie\.jpg", source or "")
+            try:
+                valid_source = bool(match and str(uuid.UUID(match[1])) == match[1])
+                capture = datetime.fromisoformat(manifest.get("selfieCapturedAt", ""))
+                valid_source = valid_source and capture.utcoffset() is not None
+            except (ValueError, TypeError):
+                valid_source = False
+            if manifest.get("referenceSource") != "live_selfie" or not valid_source:
+                raise JobError("This identity is missing its required live-selfie reference. Complete onboarding again.")
         profile_id = identity.get("profileId")
         try:
             adapter, local = self.profiles.adapter(profile_id, uid, version)
             if sha256(adapter.read_bytes()) != manifest.get("adapterSha256") or local.get("trigger") != manifest.get("trigger"):
                 raise ValueError("Local adapter differs from saved cloud identity.")
-            if self.comfy.profile(profile_id).get("training", {}).get("adapter_available"):
+            if selfie:
+                self.profiles.verify_reference(profile_id, uid, version, manifest.get("referenceSha256"))
+            public = self.comfy.profile(profile_id)
+            if public.get("training", {}).get("adapter_available") and (not selfie or public.get("reference_source") == "live_selfie"):
                 return profile_id
         except (ValueError, OSError, ComfyError, KeyError):
             pass
@@ -418,7 +458,9 @@ class Worker:
         lease.guard()
         profile = self.comfy.create_profile("cloud-" + sha256(uid.encode())[:12] + "-" + version[:20], [reference])
         profile_id = safe_id(profile["id"])
-        self.profiles.restore(profile_id, uid, manifest, adapter_data)
+        self.profiles.restore(profile_id, uid, manifest, adapter_data, reference_bytes=reference_data if selfie else None)
+        if selfie and self.comfy.profile(profile_id).get("reference_source") != "live_selfie":
+            raise JobError("The local identity extension needs its live-selfie update before generation can continue.")
         lease.write(user_fields={"identity": identity | {"profileId": profile_id, "updatedAt": now()}})
         return profile_id
 

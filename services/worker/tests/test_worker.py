@@ -16,7 +16,7 @@ from services.worker.worker import (FirebaseStore, JobError, Lease, LostLease, W
                                     identity_paths, now, sha256, validate_garment, validate_job)
 
 
-def png(size=(16, 16), metadata=False):
+def png(size=(16, 16), metadata=False, color="navy"):
     buffer = io.BytesIO()
     info = PngInfo()
     extra = {}
@@ -25,7 +25,7 @@ def png(size=(16, 16), metadata=False):
         exif = Image.Exif()
         exif[315] = "private image author"
         extra["exif"] = exif
-    Image.new("RGB", size, "navy").save(buffer, format="PNG", pnginfo=info, **extra)
+    Image.new("RGB", size, color).save(buffer, format="PNG", pnginfo=info, **extra)
     return buffer.getvalue()
 
 
@@ -87,7 +87,8 @@ def fake_store(data):
 class WorkerTests(unittest.TestCase):
     def test_training_requires_exactly_eight_owner_paths(self):
         upload = str(uuid.uuid4())
-        job = {"uid": "alice", "kind": "train", "requestVersion": 1, "uploadId": upload,
+        job = {"uid": "alice", "kind": "train", "requestVersion": 2, "uploadId": upload,
+               "selfiePath": f"users/alice/uploads/{upload}/selfie.jpg", "selfieCapturedAt": now(), "createdAt": now(),
                "photoPaths": [f"users/alice/uploads/{upload}/{i}.jpg" for i in range(8)]}
         self.assertEqual(validate_job("job1", job), "alice")
         for altered in [job | {"photoPaths": job["photoPaths"][:7]},
@@ -96,6 +97,15 @@ class WorkerTests(unittest.TestCase):
                         job | {"requestVersion": True}]:
             with self.assertRaises(ValueError):
                 validate_job("job1", altered)
+        for altered in [job | {"requestVersion": 1}, job | {"selfiePath": None},
+                        job | {"selfiePath": job["selfiePath"].replace("alice", "bob")},
+                        job | {"selfieCapturedAt": None}, job | {"selfieCapturedAt": now() - timedelta(hours=2)},
+                        job | {"selfieCapturedAt": now() + timedelta(minutes=3)}]:
+            with self.assertRaises(JobError):
+                validate_job("job1", altered)
+        # A long queue delay does not change the capture window relative to submission.
+        old = now() - timedelta(days=1)
+        self.assertEqual(validate_job("job1", job | {"createdAt": old, "selfieCapturedAt": old}), "alice")
 
     def test_catalog_rejects_owner_input_or_external_path(self):
         valid = {"active": True, "imagePath": "garments/shirt/reference.png", "baseImagePath": "garments/shirt/base.png"}
@@ -164,7 +174,8 @@ class WorkerTests(unittest.TestCase):
 
     def test_initial_user_read_failure_does_not_replace_an_unread_identity(self):
         upload = str(uuid.uuid4())
-        job = {"uid": "alice", "kind": "train", "requestVersion": 1, "uploadId": upload,
+        job = {"uid": "alice", "kind": "train", "requestVersion": 2, "uploadId": upload,
+               "selfiePath": f"users/alice/uploads/{upload}/selfie.jpg", "selfieCapturedAt": now(), "createdAt": now(),
                "photoPaths": [f"users/alice/uploads/{upload}/{i}.jpg" for i in range(8)]}
         store, comfy, lease = Mock(), Mock(), Mock()
         store.user.side_effect = RuntimeError("transient Firestore read failure")
@@ -225,7 +236,8 @@ class WorkerTests(unittest.TestCase):
             adapter = folder / "fake.safetensors"
             adapter.write_bytes(b"fake-weights")
             store, comfy, profiles, lease = Mock(), Mock(), Mock(), Mock()
-            store.download.return_value = png()
+            selfie = png(color="red")
+            store.download.side_effect = lambda path, limit: selfie if path.endswith("selfie.jpg") else png()
             uploaded = {}
             store.upload.side_effect = lambda path, data, content_type: uploaded.update({path: data})
             comfy.create_profile.return_value = {"id": "alice-local", "photos": [{"id": "p0000"}]}
@@ -234,21 +246,96 @@ class WorkerTests(unittest.TestCase):
             profiles.adapter.return_value = (adapter, {"trigger": "trained_person"})
             selector = Mock(return_value=[{"index": i, "selected": i < 5, "score": float(8-i),
                                           "reason": "test", "metrics": {}} for i in range(8)])
-            job = {"photoPaths": [f"users/alice/uploads/upload/{i}.jpg" for i in range(8)]}
-            worker = Worker(store, comfy, profiles, {}, folder / "state", selector=selector)
+            job = {"photoPaths": [f"users/alice/uploads/upload/{i}.jpg" for i in range(8)],
+                   "selfiePath": "users/alice/uploads/upload/selfie.jpg", "selfieCapturedAt": now()}
+            selfie_validator = Mock(return_value={"face_count": 1})
+            worker = Worker(store, comfy, profiles, {}, folder / "state", selector=selector, selfie_validator=selfie_validator)
             worker.train("train1", job, "alice", folder, lease)
             self.assertEqual(len(selector.call_args.args[0]), 8)
             self.assertEqual(len(comfy.create_profile.call_args.args[1]), 5)
+            self.assertTrue(all(path.read_bytes() != selfie for path in comfy.create_profile.call_args.args[1]))
+            self.assertTrue(all(path.name != "live-selfie.png" for path in selector.call_args.args[0]))
+            selfie_validator.assert_called_once()
             comfy.train.assert_called_once_with("alice-local")
+            comfy.photo.assert_not_called()
             paths = identity_paths("alice", "train1")
             self.assertEqual(set(uploaded), set(paths.values()))
             manifest = json.loads(uploaded[paths["manifestPath"]])
             self.assertEqual(manifest["uid"], "alice")
             self.assertEqual(manifest["trigger"], "trained_person")
             self.assertEqual(manifest["steps"], 400)
+            self.assertEqual(manifest["schemaVersion"], 2)
+            self.assertEqual(manifest["referenceSource"], "live_selfie")
+            self.assertEqual(manifest["referenceSourcePath"], job["selfiePath"])
+            self.assertEqual(uploaded[paths["referencePath"]], selfie)
+            profiles.bind_reference.assert_called_once_with("alice-local", "alice", "train1", selfie)
             self.assertEqual(sum(r["selected"] for r in manifest["selectedPhotos"]), 5)
             self.assertTrue(all(r["sourcePath"].startswith("users/alice/") for r in manifest["selectedPhotos"]))
             self.assertEqual(lease.write.call_args.args[0]["status"], "completed")
+
+    def test_bad_or_missing_selfie_stops_before_profile_creation_or_training(self):
+        with tempfile.TemporaryDirectory() as temp:
+            store, comfy = Mock(), Mock()
+            store.download.return_value = png()
+            worker = Worker(store, comfy, Mock(), {}, temp, selfie_validator=Mock(side_effect=ValueError("Retake your live selfie.")))
+            with self.assertRaises(JobError):
+                worker.train("job1", {"selfiePath": "users/alice/uploads/x/selfie.jpg"}, "alice", Path(temp), Mock())
+            comfy.create_profile.assert_not_called()
+            comfy.train.assert_not_called()
+
+    def test_schema2_cached_and_restored_profiles_use_selfie_without_training_photo_fallback(self):
+        for cached in (False, True):
+            with self.subTest(cached=cached), tempfile.TemporaryDirectory() as temp:
+                folder = Path(temp)
+                profiles = LocalProfiles(folder / "profiles")
+                reference, adapter = png(color="red"), b"fake-weights"
+                paths = identity_paths("alice", "train1")
+                upload = str(uuid.uuid4())
+                manifest = {"schemaVersion": 2, "uid": "alice", "version": "train1", "trigger": "trained_person",
+                            "steps": 400, **paths, "referenceSource": "live_selfie",
+                            "referenceSourcePath": f"users/alice/uploads/{upload}/selfie.jpg", "selfieCapturedAt": now().isoformat(),
+                            "referenceSha256": sha256(reference), "adapterSha256": sha256(adapter)}
+                def create(*_):
+                    directory = profiles.root / "person"
+                    directory.mkdir(parents=True)
+                    (directory / "profile.json").write_text(json.dumps({"id": "person", "trigger": "new",
+                        "photos": [{"id": "p0000", "caption": "training photo", "selected": True}]}))
+                    return {"id": "person"}
+                store, comfy, lease = Mock(), Mock(), Mock()
+                payloads = {paths["manifestPath"]: json.dumps(manifest).encode(), paths["adapterPath"]: adapter, paths["referencePath"]: reference}
+                store.download.side_effect = lambda path, limit: payloads[path]
+                comfy.create_profile.side_effect = create
+                comfy.profile.return_value = {"reference_source": "live_selfie", "training": {"adapter_available": True}}
+                if cached:
+                    create()
+                    profiles.restore("person", "alice", manifest, adapter, reference_bytes=reference)
+                    # Cached training profiles may still have five selected photos; inference must ignore them.
+                    directory, profile = profiles.read("person")
+                    profile["photos"][0]["selected"] = True
+                    profiles.save(directory, profile)
+                worker = Worker(store, comfy, profiles, {}, folder / "state")
+                result = worker.identity_profile("alice", {"status": "ready", "version": "train1", "profileId": "person", **paths}, folder, lease)
+                self.assertEqual(result, "person")
+                self.assertEqual(profiles.verify_reference(result, "alice", "train1", sha256(reference)).read_bytes(), reference)
+                if cached:
+                    comfy.create_profile.assert_not_called()
+                    self.assertEqual(store.download.call_count, 1)  # Only manifest; local selfie verified.
+                else:
+                    self.assertFalse(profiles.read(result)[1]["photos"][0]["selected"])
+                comfy.train.assert_not_called()
+                comfy.photo.assert_not_called()
+
+    def test_schema2_cannot_fall_back_when_reference_provenance_is_missing(self):
+        with tempfile.TemporaryDirectory() as temp:
+            paths = identity_paths("alice", "train1")
+            manifest = {"schemaVersion": 2, "uid": "alice", "version": "train1", "steps": 400, **paths}
+            store, comfy = Mock(), Mock()
+            store.download.return_value = json.dumps(manifest).encode()
+            worker = Worker(store, comfy, Mock(), {}, temp)
+            with self.assertRaises(JobError):
+                worker.identity_profile("alice", {"status": "ready", "version": "train1", **paths}, Path(temp), Mock())
+            comfy.create_profile.assert_not_called()
+            comfy.submit.assert_not_called()
 
     def test_generation_uses_catalog_and_publishes_two_private_results(self):
         with tempfile.TemporaryDirectory() as temp:
