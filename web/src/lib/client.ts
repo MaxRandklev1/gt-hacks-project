@@ -10,7 +10,7 @@ export type PhotoSelection = { index: number; selected: boolean; score: number; 
 export type UserProfile = {
   displayName?: string; email?: string; photoURL?: string; heightCm?: number; weightKg?: number; measurementSystem?: 'us' | 'metric';
   trainingJobId?: string;
-  identity?: { status: 'selecting' | 'training' | 'awaiting_reference' | 'ready' | 'failed'; mode?: 'faceswap'; selectedPhotos?: PhotoSelection[]; error?: string; version?: string; profileId?: string };
+  identity?: { status: 'selecting' | 'training' | 'awaiting_reference' | 'ready' | 'failed'; mode?: 'faceswap' | 'personal_base'; previewPath?: string; selectedPhotos?: PhotoSelection[]; error?: string; version?: string; profileId?: string };
 };
 export type Job = { id: string; uid: string; kind: 'train' | 'finalize' | 'enroll' | 'generate'; requestVersion?: number; trainingJobId?: string; status: 'queued' | 'running' | 'completed' | 'failed'; stage?: string; message?: string; progress?: number; error?: string; garmentId?: string; createdAt?: Timestamp };
 export type Garment = { id: string; name: string; brand?: string; description?: string; imagePath: string; baseImagePath: string; thumbnailPath?: string; active: boolean };

@@ -1,31 +1,52 @@
-# Fast face-swap try-on
+# Personal-base try-on (default)
 
-The app's default path. It replaces per-user LoRA training and per-scan diffusion with two steps:
+Goal: an unfamiliar person uploads one selfie and sees themselves (face, hair or head covering, beard, glasses, skin tone) in each catalog garment, in the model's pose, with a neutral expression. Nothing is prepared per person ahead of time.
 
-1. **Once per garment (before the demo):** `Qwen21_Garment_Styled_2K.api.json` dresses the fixed base model in the garment. The identity adapter, BFS head-swap LoRA and person reference are removed, so the model keeps his own face and neutral expression. The reviewed refinement/composite pass is unchanged. Outputs: the original 1024 render and a 2K image (Nomos 4×, then halved). The worker caches both under `.local/firebase-worker/styled/`.
-2. **Per scan:** `FaceSwap_TryOn_2K.api.json` swaps the account's selfie onto both cached renders with FaceFusion HyperSwap (`hyperswap_1c_256`, local ONNX, `api_token = -1`). It returns a 1024 PNG and a 2K JPEG.
+## How it works
 
-HyperSwap transfers **facial identity only**. Expression, gaze, head pose, hair, lighting, body and background all come from the garment render. A smiling or funny-face selfie still produces the model's closed-mouth neutral expression, as if the person had stood in for the model at the same shoot.
+1. **Once per garment (worker startup):** `Qwen21_Garment_Styled_2K.api.json` dresses the fixed base model in the garment. Output 1024 + 2K, cached under `.local/firebase-worker/styled/`. Its garment mask is computed once on the CPU.
+2. **Once per person (onboarding, GPU, ~50 s warm):**
+   - The selfie is parsed and cropped to head and shoulders. With no usable face, the user is asked to retake it.
+   - `Qwen21_Personal_Base_2K.api.json` (BFS head-swap LoRA, selfie as reference, person-neutral prompt, neutral closed-mouth expression, 24 steps, texture pass skipped) regenerates the whole head and exposed skin on the pose base.
+   - Everything outside the head/hair/skin edit region is locked back to the pose base, so the garment renders line up exactly. The worker checks lower-body alignment.
+   - The resulting **personal base** plus its hair/covering and tee masks are saved privately (`users/{uid}/identity/{jobId}/personal-*`). The app shows it as "This is you in the fitting room", with a retake option.
+3. **Per scan (CPU only, ~1.4 s of worker time):** the garment region of the render is composited onto the personal base. Hair and head coverings are put back over the garment using the pose base as a clean plate, so curls keep their shape without a tee fringe. Tee the new garment doesn't cover, and thin gaps between hair and garment, are filled from the personal base's surroundings. Output: a 1024 PNG and a 2048 JPEG.
 
-## Onboarding
+Scans run on a separate CPU lane in the worker, so they never wait behind someone's onboarding.
 
-Version-5 onboarding is height/weight, one selfie and consent. The `enroll` job checks that the selfie contains one clear face, then saves it with a schema-4 manifest (`mode: faceswap`) under `users/{uid}/identity/{jobId}/`. No photo set, training or GPU work is involved. Earlier trained identities remain usable: their saved reference selfie becomes the swap source.
+## Masks
 
-## Builders
+`services/worker/parsing.py` runs SegFormer-B2 human parsing (`mattmdjaga/segformer_b2_clothes`, ONNX, CPU, ~1 s per image, flip-averaged). Download `onnx/model.onnx` into `comfy-identity/parsing-assets/`; it is ignored by Git. **Licence:** NVIDIA SegFormer licence, non-commercial research/evaluation only. That suits this hackathon demo; replace it before commercial use.
+
+`services/worker/compose.py` holds all mask logic:
+- Printed faces and arms on garments are kept as garment by checking them against the real head and arm positions.
+- Hair/head-covering, face, garment and uncovered masks.
+- Alignment scores, pose locking and the clean-plate matte.
+
+## Acceptance run (September 26, 2026)
+
+`comfy-identity/run_personal_base_acceptance.py` uses identical settings for every person and no manual fixes. It ran nine selfies: Jon (neutral and grinning) plus seven generated test people never used for tuning.
+- Long curly hair; glasses with a broad grin; hijab; 70s silver hair; long hair while laughing; thick full beard; shoulder-length locs.
+- Garments: dragon tee, hooded jacket, photographic tee (printed faces); the polo was checked in the worker run.
+
+Results (visual review by the developer; the people themselves have not reviewed them):
+- Hair length and texture, beards, glasses and skin tone carried over; the hijab was kept after the covering instruction was added. Grins and laughs came out closed-mouth neutral.
+- The first prompt gave Jon long hair he doesn't have. "Copy the hair exactly" fixed it.
+- The first covering instruction added a cap to a person without one; the conditional wording fixed both cases.
+- Garment render alignment: 0.91–0.99. Personal-base lower-body alignment is locked by construction.
+- Worker timing (real ComfyUI/parser, Firebase stubbed):
+  - onboarding 53–54 s warm (73 s the first time, including the one-time pose-base upscale and garment masks)
+  - scans 1.35–1.56 s, including while another person's onboarding ran on the GPU
+- Firebase round trips and phone upload/download are additional and not measured live.
+
+Known limits: a faint soft seam can remain where long hair meets a garment whose shoulder sits lower than the base tee. The body, pose and build are the base model's: this is an appearance preview, not a fit or body-shape estimate. Garments must cover at least the base tee's area. The acceptance people are synthetic; real judges' own likeness judgement is still the real test.
+
+## Commands
 
 ```powershell
-python comfy-identity/build_garment_styled_workflow.py   # derived from Qwen21_Universal_TryOn_4K.api.json
-python comfy-identity/build_faceswap_workflow.py         # settings from DeepFake.json
+python comfy-identity/build_personal_base_workflow.py
+services/worker/.venv/Scripts/python.exe comfy-identity/run_personal_base_acceptance.py --name trial `
+  --garment-map garment_map.json --garments thread-2 thread-3 --person me=selfie.jpg
 ```
 
-Both graphs need the **Facefusion_comfyui** custom node (its HyperSwap, SCRFD, ArcFace and BiSeNet ONNX models download on first use) in addition to the existing try-on assets.
-
-## Worker
-
-The worker starts on `--pipeline faceswap`, polls every second, and on startup renders any active garment without a cached render, then warms the swap models. A garment added later renders on its first scan, which takes a few minutes once. `--no-prewarm` skips startup rendering; `--pipeline qwen` restores the earlier trained-adapter diffusion path.
-
-## Limits
-
-- Hair, head shape, neck, arms and skin tone below the face stay the model's. Beards transfer partially.
-- One body and pose for every garment; this is a visual preview, not a fit estimate.
-- The swap model works at 256 px internally, with pixel boost to 512 (1024 image) or 1024 (2K image). Very small, blurry or side-on selfies weaken likeness.
+Earlier accounts without a personal base still work through the HyperSwap face-swap path (`FaceSwap_TryOn_2K.api.json`). `--pipeline qwen` restores the original trained-adapter diffusion path.

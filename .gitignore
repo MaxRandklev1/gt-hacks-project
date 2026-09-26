@@ -38,6 +38,7 @@ node_modules/
 /comfy-identity/training/trainer/dataset_test_cache/
 /comfy-identity/realism-assets/
 /comfy-identity/upscale-assets/
+/comfy-identity/parsing-assets/
 
 # Local experiments and run records; keep their authored scripts.
 *.log
@@ -83,3 +84,4 @@ application_default_credentials.json
 /services/worker/.venv/
 /services/worker/.worker-cache/
 !/web/public/demo/*.png
+/comfy-identity/personal-base-acceptance/

@@ -70,21 +70,43 @@ class FaceSwapWorkerTests(unittest.TestCase):
         worker = Worker(store, comfy, Mock(), {}, Path(temp) / "state", selfie_validator=Mock())
         return worker, store, comfy, lease
 
-    def test_enroll_publishes_selfie_identity_without_training(self):
+    def test_enroll_builds_personal_base_without_training(self):
         with tempfile.TemporaryDirectory() as temp:
             worker, store, comfy, lease = self.make(temp)
             store.download.return_value = png()
+            garment = {"active": True, "imagePath": "garments/shirt/reference.png", "baseImagePath": "garments/shirt/base.png"}
+            store.active_garments.return_value = [("shirt", garment)]
+            worker.styled_garment = Mock(return_value=("render1", (Path("a.png"), Path("b.png")), "pose1"))
+            worker.personal_base = Mock(return_value=(png(), png((32, 32)), png(), png()))
+            worker.garment_masks = Mock()
             user = {"heightCm": 180, "weightKg": 75, "measurementSystem": "us"}
             worker.enroll("enroll1", enroll_job(), "alice", user, Path(temp), lease)
-            self.assertEqual([call.args[0] for call in store.upload.call_args_list],
-                             ["users/alice/identity/enroll1/reference.png", "users/alice/identity/enroll1/manifest.json"])
-            manifest = json.loads(store.upload.call_args_list[1].args[1])
-            self.assertEqual((manifest["schemaVersion"], manifest["mode"], manifest["uid"]), (4, "faceswap", "alice"))
-            identity = lease.write.call_args.kwargs["user_fields"]["identity"]
-            self.assertEqual((identity["status"], identity["mode"], identity["referenceSha256"]), ("ready", "faceswap", manifest["referenceSha256"]))
+            uploaded = sorted(call.args[0] for call in store.upload.call_args_list)
+            self.assertEqual(uploaded, sorted(["users/alice/identity/enroll1/reference.png", "users/alice/identity/enroll1/manifest.json",
+                                               "users/alice/identity/enroll1/personal-pose1-1024.png", "users/alice/identity/enroll1/personal-pose1-2k.png",
+                                               "users/alice/identity/enroll1/personal-pose1-hair.png", "users/alice/identity/enroll1/personal-pose1-tee.png"]))
+            manifest = json.loads(next(call.args[1] for call in store.upload.call_args_list if call.args[0].endswith("manifest.json")))
+            self.assertEqual((manifest["schemaVersion"], manifest["mode"], manifest["uid"]), (5, "personal_base", "alice"))
+            final = next(call for call in lease.write.call_args_list if "user_fields" in call.kwargs)
+            identity = final.kwargs["user_fields"]["identity"]
+            self.assertEqual((identity["status"], identity["mode"]), ("ready", "personal_base"))
+            self.assertEqual(identity["personalBases"]["pose1"]["p1024Sha256"], sha256(png()))
+            self.assertEqual(identity["previewPath"], "users/alice/identity/enroll1/personal-pose1-1024.png")
+            worker.personal_base.assert_called_once()
             comfy.create_profile.assert_not_called()
             comfy.train.assert_not_called()
-            comfy.submit.assert_not_called()
+
+    def test_enroll_rejects_unusable_selfie_with_retake_guidance(self):
+        from services.worker.personal import CompositeError
+        with tempfile.TemporaryDirectory() as temp:
+            worker, store, _, lease = self.make(temp)
+            store.download.return_value = png()
+            store.active_garments.return_value = [("shirt", {"active": True, "imagePath": "garments/shirt/reference.png", "baseImagePath": "garments/shirt/base.png"})]
+            worker.styled_garment = Mock(return_value=("render1", (Path("a.png"), Path("b.png")), "pose1"))
+            worker.personal_base = Mock(side_effect=CompositeError("We couldn't find a clear face."))
+            with self.assertRaisesRegex(JobError, "clear face"):
+                worker.enroll("enroll1", enroll_job(), "alice", {"heightCm": 180, "weightKg": 75, "measurementSystem": "us"}, Path(temp), lease)
+            store.upload.assert_not_called()
 
     def test_enroll_requires_measurements_and_a_usable_face(self):
         with tempfile.TemporaryDirectory() as temp:

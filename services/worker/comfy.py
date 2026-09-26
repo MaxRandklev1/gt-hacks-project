@@ -89,6 +89,23 @@ def patch_swap_graph(template, *, selfie_image, styled_image, styled_2k_image, j
     return graph
 
 
+def patch_personal_graph(template, *, base_image, profile_id, job_id, steps, base_outputs):
+    """Onboarding personal base. Only data inputs, the step count and optional pose-base outputs change."""
+    safe_id(profile_id)
+    if type(steps) is not int or not 8 <= steps <= 80:
+        raise ValueError("Invalid personal-base step count.")
+    required = {"1": "LoadImage", "14": "UniversalIdentityProfile", "9": "KSampler", "29": "ImageCompositeMasked",
+                "24": "SaveImage", "35": "SaveImage", "42": "SaveImage", "43": "SaveImage"}
+    graph = _patch_images(template, required, {"1": base_image}, f"PersonalBase/{safe_id(job_id)}")
+    graph["14"]["inputs"].update(profile_id=profile_id, reference_index=0, use_trained_identity=False)
+    graph["9"]["inputs"]["steps"] = steps
+    graph["29"]["inputs"]["source"] = ["17", 0]  # First-pass decode: the texture pass is skipped for speed.
+    if not base_outputs:  # The resized/upscaled pose base is cached after the first onboarding.
+        for node_id in ("39", "40", "41", "42"):
+            graph.pop(node_id)
+    return graph
+
+
 class ComfyClient:
     def __init__(self, base_url="http://127.0.0.1:8188", session=None):
         parsed = urlsplit(base_url)

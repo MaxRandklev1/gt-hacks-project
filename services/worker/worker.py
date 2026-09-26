@@ -23,11 +23,15 @@ import uuid
 from PIL import Image, ImageOps
 
 try:
-    from .comfy import ComfyClient, ComfyError, LocalProfiles, patch_graph, patch_styled_graph, patch_swap_graph, safe_id
+    from .comfy import ComfyClient, ComfyError, LocalProfiles, patch_graph, patch_personal_graph, patch_styled_graph, patch_swap_graph, safe_id
+    from .parsing import DEFAULT_MODEL as PARSING_MODEL
+    from .personal import CompositeError, PersonalBaseMixin, personal_paths
     from .photo_selection import select_best_photos
     from .selfie import validate_selfie
 except ImportError:
-    from comfy import ComfyClient, ComfyError, LocalProfiles, patch_graph, patch_styled_graph, patch_swap_graph, safe_id
+    from comfy import ComfyClient, ComfyError, LocalProfiles, patch_graph, patch_personal_graph, patch_styled_graph, patch_swap_graph, safe_id
+    from parsing import DEFAULT_MODEL as PARSING_MODEL
+    from personal import CompositeError, PersonalBaseMixin, personal_paths
     from photo_selection import select_best_photos
     from selfie import validate_selfie
 
@@ -41,6 +45,9 @@ SPLIT_TRAINING_STEPS = 80
 POLL_SECONDS = 1
 STYLED_TEMPLATE = ROOT / "comfy-identity/Qwen21_Garment_Styled_2K.api.json"
 SWAP_TEMPLATE = ROOT / "comfy-identity/FaceSwap_TryOn_2K.api.json"
+PERSONAL_TEMPLATE = ROOT / "comfy-identity/Qwen21_Personal_Base_2K.api.json"
+GPU_KINDS = frozenset({"train", "finalize", "enroll"})
+CPU_KINDS = frozenset({"generate"})  # Personal-base try-ons are pure CPU compositing.
 
 
 class JobError(ValueError):
@@ -264,13 +271,15 @@ class FirebaseStore:
     def garment(self, garment_id):
         return self.db.collection("garments").document(safe_id(garment_id)).get().to_dict()
 
-    def claim(self, worker_id):
+    def claim(self, worker_id, kinds=None):
         candidates = self.db.collection("jobs").where(filter=self.filter("status", "==", "queued")).limit(20).stream()
         for candidate in candidates:
             def take(transaction):
                 document = candidate.reference.get(transaction=transaction)
                 job = document.to_dict()
                 if not job or job.get("status") != "queued":
+                    return None
+                if kinds is not None and job.get("kind") not in kinds and job.get("kind") in GPU_KINDS | CPU_KINDS:
                     return None
                 try:
                     validate_job(candidate.id, job)
@@ -411,9 +420,9 @@ class Lease:
         return expiry
 
 
-class Worker:
+class Worker(PersonalBaseMixin):
     def __init__(self, store, comfy, profiles, template, state_dir, selector=select_best_photos, selfie_validator=validate_selfie,
-                 *, pipeline="faceswap", styled_template=None, swap_template=None):
+                 *, pipeline="faceswap", styled_template=None, swap_template=None, personal_template=None):
         self.store, self.comfy, self.profiles = store, comfy, profiles
         self.template, self.state_dir, self.selector = template, Path(state_dir), selector
         self.selfie_validator = selfie_validator
@@ -422,6 +431,7 @@ class Worker:
         self.pipeline = pipeline
         self.styled_template = styled_template or json.loads(STYLED_TEMPLATE.read_text(encoding="utf-8-sig"))
         self.swap_template = swap_template or json.loads(SWAP_TEMPLATE.read_text(encoding="utf-8-sig"))
+        self.personal_template = personal_template or json.loads(PERSONAL_TEMPLATE.read_text(encoding="utf-8-sig"))
         self.comfy_inputs = {}  # Cached garment renders already uploaded to local ComfyUI this session.
         self.state_dir.mkdir(parents=True, exist_ok=True)
 
@@ -686,27 +696,62 @@ class Worker:
         return profile_id
 
     def enroll(self, job_id, job, uid, user, folder, lease):
-        """Selfie-only onboarding: validate one clear face and publish it as the face-swap identity."""
+        """Selfie onboarding: check the selfie, then build the person's personal base for each pose base."""
         if (type(user.get("heightCm")) not in (int, float) or not 80 <= user["heightCm"] <= 250
                 or type(user.get("weightKg")) not in (int, float) or not 25 <= user["weightKg"] <= 300
                 or user.get("measurementSystem") not in ("us", "metric")):
             raise JobError("Save your height and weight before finishing onboarding.")
-        lease.write({"stage": "checking_selfie", "message": "Checking your selfie.", "progress": 0.3})
+        lease.write({"stage": "checking_selfie", "message": "Checking your selfie.", "progress": 0.05})
         reference_data, provenance = self.reference(job, folder)
         destinations = faceswap_paths(uid, job_id)
         reference_sha = sha256(reference_data)
-        manifest = {"schemaVersion": 4, "mode": "faceswap", "uid": uid, "version": job_id, **destinations,
-                    **{key: value.isoformat() if isinstance(value, datetime) else value for key, value in provenance.items()},
-                    "referenceSha256": reference_sha}
         self.cache_reference(reference_sha, reference_data)
-        lease.write({"stage": "saving_reference", "message": "Saving your look.", "progress": 0.7})
-        self.store.upload(destinations["referencePath"], reference_data, "image/png")
-        lease.guard()
-        self.store.upload(destinations["manifestPath"], json.dumps(manifest).encode(), "application/json")
-        identity = {"status": "ready", "mode": "faceswap", "version": job_id, **destinations, **provenance,
-                    "referenceSha256": reference_sha, "error": None, "updatedAt": now()}
+        bases = {}
+        for garment_id, garment in self.store.active_garments():
+            try:
+                catalog_paths = validate_garment(garment_id, garment)
+            except JobError:
+                continue
+            key, outputs, base_key = self.styled_garment(
+                garment_id, garment, catalog_paths, folder, lease.guard,
+                lambda message: lease.write({"stage": "preparing_pieces", "message": message, "progress": 0.1}))
+            bases.setdefault(base_key, []).append((key, outputs))
+        if not bases:
+            raise JobError("No pieces are available yet. Try again shortly.")
+        records, uploads = {}, [(destinations["referencePath"], reference_data, "image/png")]
+        try:
+            for base_key in bases:
+                p1024, p2k, hair, tee = self.personal_base(
+                    uid, job_id, folder / "selfie-reference.png", base_key, lease.guard,
+                    lambda message, progress: lease.write({"stage": "creating_look", "message": message, "progress": progress}))
+                assets = {"p1024": p1024, "p2k": p2k, "hair": hair, "tee": tee}
+                self.cache_personal(uid, job_id, base_key, assets)
+                paths = personal_paths(uid, job_id, base_key)
+                records[base_key] = paths | {name + "Sha256": sha256(data) for name, data in assets.items()}
+                uploads += [(paths[name], data, "image/png") for name, data in assets.items()]
+        except CompositeError as error:
+            raise JobError(str(error)) from None
+        manifest = {"schemaVersion": 5, "mode": "personal_base", "uid": uid, "version": job_id, **destinations,
+                    **{key: value.isoformat() if isinstance(value, datetime) else value for key, value in provenance.items()},
+                    "referenceSha256": reference_sha, "personalBases": records}
+        uploads.append((destinations["manifestPath"], json.dumps(manifest).encode(), "application/json"))
+        lease.write({"stage": "saving_look", "message": "Saving your look.", "progress": 0.92})
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            for upload in [pool.submit(self.store.upload, *item) for item in uploads]:
+                upload.result()
+        preview = next(iter(records.values()))["p1024"]
+        identity = {"status": "ready", "mode": "personal_base", "version": job_id, **destinations, **provenance,
+                    "referenceSha256": reference_sha, "personalBases": records, "previewPath": preview,
+                    "error": None, "updatedAt": now()}
         lease.write({"status": "completed", "stage": "ready", "message": "Your fitting room is ready.", "progress": 1.0},
                     user_fields={"identity": identity})
+        # Garment masks are CPU work the first scan would otherwise pay for.
+        for base_key, renders in bases.items():
+            for key, outputs in renders:
+                try:
+                    self.garment_masks(key, outputs, base_key)
+                except Exception:
+                    logging.exception("Could not prepare masks for garment render %s.", key)
 
     def cache_reference(self, digest, data):
         path = self.state_dir / "references" / f"{digest}.png"
@@ -751,10 +796,15 @@ class Worker:
         key = sha256(json.dumps([garment_id, catalog_paths, stamp, self.styled_template], sort_keys=True).encode())[:32]
         directory = self.state_dir / "styled" / key
         outputs = directory / "styled-1024.png", directory / "styled-2k.png"
-        if all(path.is_file() for path in outputs):
-            return key, outputs
-        notify("Preparing this piece for the fitting room. This happens once per piece and takes a few minutes.")
+        base_file = directory / "base-key.txt"
+        if all(path.is_file() for path in outputs) and base_file.is_file():
+            return key, outputs, base_file.read_text().strip()
         base = clean_image(self.store.download(catalog_paths["baseImagePath"], MAX_IMAGE_BYTES), folder / "base.png")
+        base_key = self.register_pose_source(base.read_bytes())
+        if all(path.is_file() for path in outputs):
+            base_file.write_text(base_key)
+            return key, outputs, base_key
+        notify("Preparing this piece for the fitting room. This happens once per piece and takes a few minutes.")
         garment_image = clean_image(self.store.download(catalog_paths["imagePath"], MAX_IMAGE_BYTES), folder / "garment.png")
         graph = patch_styled_graph(self.styled_template, base_image=self.comfy.upload_image(base),
                                    garment_image=self.comfy.upload_image(garment_image), key=key)
@@ -770,7 +820,8 @@ class Worker:
             temporary = path.with_name(".styled-" + uuid.uuid4().hex + ".tmp")
             temporary.write_bytes(data)
             temporary.replace(path)
-        return key, outputs
+        base_file.write_text(base_key)
+        return key, outputs, base_key
 
     def prewarm(self):
         """Before the demo: render every active garment once and load the face-swap models."""
@@ -787,7 +838,7 @@ class Worker:
                 logging.exception("Could not prepare garment %s.", garment_id)
         if rendered:
             # The base model's own face is a harmless source that loads the detector/swapper sessions.
-            key, outputs = rendered[0]
+            key, outputs, _ = rendered[0]
             names = self.comfy_styled_inputs(key, outputs)
             graph = patch_swap_graph(self.swap_template, selfie_image=names[0], styled_image=names[0],
                                      styled_2k_image=names[1], job_id="prewarm-" + uuid.uuid4().hex[:12])
@@ -806,8 +857,12 @@ class Worker:
         catalog_paths = validate_garment(job["garmentId"], garment)
         history = {"uid": uid, "jobId": job_id, "garmentId": job["garmentId"],
                    "garmentName": str(garment.get("name", "Garment"))[:160], "status": "running", "createdAt": now()}
-        selfie = self.identity_reference(uid, user.get("identity"), folder)
-        key, styled = self.styled_garment(job["garmentId"], garment, catalog_paths, folder, lease.guard,
+        identity = user.get("identity")
+        if isinstance(identity, dict) and identity.get("status") == "ready" and identity.get("mode") == "personal_base":
+            return self.generate_personal(job_id, job, uid, identity, folder, lease, garment, catalog_paths, history)
+        # Earlier face-swap and trained identities: HyperSwap from their saved selfie.
+        selfie = self.identity_reference(uid, identity, folder)
+        key, styled, _ = self.styled_garment(job["garmentId"], garment, catalog_paths, folder, lease.guard,
                                           lambda message: lease.write({"stage": "styling", "message": message, "progress": 0.1},
                                                                       generation=history))
         styled_names = self.comfy_styled_inputs(key, styled)
@@ -831,6 +886,38 @@ class Worker:
                 upload.result()
         lease.write({"status": "completed", "stage": "ready", "message": "Your try-on is ready.", "progress": 1.0,
                      "comfyPromptId": prompt_id, "submissionPending": False},
+                    generation=history | {"status": "completed", "imagePath": image_path, "image2kPath": image2k_path,
+                                          "width": size[0], "height": size[1], "width2k": size2k[0], "height2k": size2k[1], "error": None})
+
+    def generate_personal(self, job_id, job, uid, identity, folder, lease, garment, catalog_paths, history):
+        """CPU try-on: the garment region of the cached render onto the person's personal base."""
+        safe_id(identity.get("version"))
+        key, styled, base_key = self.styled_garment(
+            job["garmentId"], garment, catalog_paths, folder, lease.guard,
+            lambda message: lease.write({"stage": "styling", "message": message, "progress": 0.1}, generation=history))
+        lease.write({"stage": "generating", "message": "Putting the piece on you.", "progress": 0.4}, generation=history)
+        try:
+            personal = self.personal_assets(uid, identity, base_key)
+            masks = self.garment_masks(key, styled, base_key)
+            composite, composite2k = self.composite_tryon(personal, styled, masks, base_key)
+        except CompositeError as error:
+            raise JobError(str(error)) from None
+        except ValueError:
+            raise JobError("This piece isn't ready for try-ons yet. Please try another piece.") from None
+        output = io.BytesIO()
+        composite.save(output, format="PNG")
+        image, size = clean_output(output.getvalue())
+        output = io.BytesIO()
+        composite2k.save(output, format="PNG")
+        image2k, size2k = clean_output(output.getvalue(), image_format="JPEG")
+        prefix = f"users/{uid}/generations/{job_id}"
+        image_path, image2k_path = prefix + "/result.png", prefix + "/result-2k.jpg"
+        lease.guard()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            for upload in [pool.submit(self.store.upload, image_path, image, "image/png"),
+                           pool.submit(self.store.upload, image2k_path, image2k, "image/jpeg")]:
+                upload.result()
+        lease.write({"status": "completed", "stage": "ready", "message": "Your try-on is ready.", "progress": 1.0},
                     generation=history | {"status": "completed", "imagePath": image_path, "image2kPath": image2k_path,
                                           "width": size[0], "height": size[1], "width2k": size2k[0], "height2k": size2k[1], "error": None})
 
@@ -867,7 +954,8 @@ class Worker:
                                           "width": size[0], "height": size[1], "width4k": size4k[0], "height4k": size4k[1], "error": None})
 
 
-def check_readiness(store, comfy, profiles_root, template, identity_config=None, styled_template=None, swap_template=None):
+def check_readiness(store, comfy, profiles_root, template, identity_config=None, styled_template=None, swap_template=None,
+                    personal_template=None):
     """Read-only checks; never claim jobs, write profiles, load a model or submit GPU work."""
     report = {"ready": False, "checks": {}, "warnings": []}
     # Validate the worker's fixed graph mappings using harmless placeholder data.
@@ -881,6 +969,12 @@ def check_readiness(store, comfy, profiles_root, template, identity_config=None,
         patch_swap_graph(swap_template, selfie_image="check_selfie.png", styled_image="check_styled.png",
                          styled_2k_image="check_styled_2k.png", job_id="readiness-check")
         templates.append(swap_template)
+    if personal_template is not None:
+        patch_personal_graph(personal_template, base_image="check_base.png", profile_id="readiness-check",
+                             job_id="readiness-check", steps=24, base_outputs=True)
+        templates.append(personal_template)
+        if not PARSING_MODEL.is_file():
+            raise JobError("The human-parsing model is missing from comfy-identity/parsing-assets/.")
     nodes = [node for graph in templates for node in graph.values()]
     profiles_root = Path(profiles_root).resolve()
     if not profiles_root.is_dir() or not os.access(profiles_root, os.R_OK):
@@ -996,7 +1090,8 @@ def main(argv=None):
             store = FirebaseStore(args.project, args.bucket)
             result = check_readiness(store, comfy, args.profiles_root, template, args.identity_config,
                                      json.loads(STYLED_TEMPLATE.read_text(encoding="utf-8-sig")),
-                                     json.loads(SWAP_TEMPLATE.read_text(encoding="utf-8-sig")))
+                                     json.loads(SWAP_TEMPLATE.read_text(encoding="utf-8-sig")),
+                                     json.loads(PERSONAL_TEMPLATE.read_text(encoding="utf-8-sig")))
             print(json.dumps({"project": args.project, "bucket": args.bucket, **result}, indent=2))
             return
         except Exception as error:
@@ -1014,6 +1109,24 @@ def main(argv=None):
                 worker.prewarm()
             except Exception:
                 logging.exception("Prewarm failed; uncached garments will render on their first request.")
+        # Two lanes: GPU work (onboarding/training) and CPU try-on compositing, so a scan never
+        # waits behind someone else's onboarding. The qwen pipeline renders try-ons on the GPU.
+        gpu_kinds = GPU_KINDS | (CPU_KINDS if args.pipeline == "qwen" else frozenset())
+        stop = threading.Event()
+
+        def cpu_lane():
+            while not stop.is_set():
+                try:
+                    claimed = store.claim(worker_id + "-cpu", CPU_KINDS)
+                    if claimed:
+                        worker.run_job(*claimed)
+                        continue
+                except Exception:
+                    logging.exception("CPU lane polling failed; no job is resubmitted automatically.")
+                stop.wait(POLL_SECONDS)
+
+        if args.pipeline == "faceswap" and not args.once:
+            threading.Thread(target=cpu_lane, name="cpu-lane", daemon=True).start()
         last_expiry = 0.0
         while True:
             try:
@@ -1021,7 +1134,7 @@ def main(argv=None):
                     store.expire_abandoned()
                     last_expiry = time.monotonic()
                 # Existing local training or user-queued inference must finish first.
-                claimed = store.claim(worker_id) if comfy.idle() else None
+                claimed = store.claim(worker_id, None if args.once else gpu_kinds) if comfy.idle() else None
                 if claimed:
                     worker.run_job(*claimed)
                 if args.once:
@@ -1033,6 +1146,7 @@ def main(argv=None):
                 if args.once:
                     raise
             time.sleep(POLL_SECONDS)
+        stop.set()
 
 
 if __name__ == "__main__":
