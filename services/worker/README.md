@@ -28,6 +28,8 @@ This process polls Firebase for queued jobs and performs GPU work on the existin
    & .\.venv\Scripts\python.exe .\worker.py --profiles-root 'C:/Projects/gt-hacks-project/comfy-identity/training/profiles'
    ```
 
+   By default (`--pipeline faceswap`) the worker renders every active garment once at startup (a few minutes each, cached under `.local/firebase-worker/styled/`), warms the face swapper, then handles each try-on in seconds; see [fast try-on](../../comfy-identity/FAST_TRYON_README.md). `--no-prewarm` skips startup rendering and `--pipeline qwen` restores the earlier trained-adapter 4K graph. The worker polls every second.
+
    `--once` handles at most one available job and exits. `--workflow` can select another operator-reviewed API file; jobs cannot supply a workflow, prompt, model or filesystem path. Keep one worker per local GPU, using the default shared state directory. The worker's OS lock and private temporary files live under ignored `.local/firebase-worker`.
 
 ## Check readiness without running a job

@@ -1,0 +1,123 @@
+{
+  "1": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "faceswap_selfie.png"
+    },
+    "_meta": {
+      "title": "Account selfie (identity only)"
+    }
+  },
+  "2": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "faceswap_styled_1024.png"
+    },
+    "_meta": {
+      "title": "Garment render 1024"
+    }
+  },
+  "3": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "faceswap_styled_2k.png"
+    },
+    "_meta": {
+      "title": "Garment render 2K"
+    }
+  },
+  "4": {
+    "class_type": "AdvancedSwapFaceImage",
+    "_meta": {
+      "title": "Swap face / 1024"
+    },
+    "inputs": {
+      "source_images": [
+        "1",
+        0
+      ],
+      "target_image": [
+        "2",
+        0
+      ],
+      "api_token": "-1",
+      "face_swapper_model": "hyperswap_1c_256",
+      "face_detector_model": "scrfd",
+      "pixel_boost": "512x512",
+      "face_occluder_model": "none",
+      "face_parser_model": "bisenet_resnet_34",
+      "face_mask_blur": 0.3,
+      "face_selector_mode": "one",
+      "face_position": 0,
+      "sort_order": "large-small",
+      "score_threshold": 0.3,
+      "use_box_mask": true,
+      "use_occlusion_mask": false,
+      "use_area_mask": false,
+      "use_region_mask": false,
+      "face_mask_areas": "upper-face,lower-face,mouth",
+      "face_mask_regions": "skin,nose,mouth,upper-lip,lower-lip",
+      "face_mask_padding": "0,0,0,0"
+    }
+  },
+  "5": {
+    "class_type": "AdvancedSwapFaceImage",
+    "_meta": {
+      "title": "Swap face / 2K"
+    },
+    "inputs": {
+      "source_images": [
+        "1",
+        0
+      ],
+      "target_image": [
+        "3",
+        0
+      ],
+      "api_token": "-1",
+      "face_swapper_model": "hyperswap_1c_256",
+      "face_detector_model": "scrfd",
+      "pixel_boost": "1024x1024",
+      "face_occluder_model": "none",
+      "face_parser_model": "bisenet_resnet_34",
+      "face_mask_blur": 0.3,
+      "face_selector_mode": "one",
+      "face_position": 0,
+      "sort_order": "large-small",
+      "score_threshold": 0.3,
+      "use_box_mask": true,
+      "use_occlusion_mask": false,
+      "use_area_mask": false,
+      "use_region_mask": false,
+      "face_mask_areas": "upper-face,lower-face,mouth",
+      "face_mask_regions": "skin,nose,mouth,upper-lip,lower-lip",
+      "face_mask_padding": "0,0,0,0"
+    }
+  },
+  "6": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "4",
+        0
+      ],
+      "filename_prefix": "FaceSwap_TryOn/final"
+    },
+    "_meta": {
+      "title": "FINAL - 1024"
+    }
+  },
+  "7": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "5",
+        0
+      ],
+      "filename_prefix": "FaceSwap_TryOn/final_2K"
+    },
+    "_meta": {
+      "title": "FINAL - 2K"
+    }
+  }
+}

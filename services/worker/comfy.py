@@ -57,6 +57,38 @@ def patch_graph(template, *, profile_id, base_image, garment_image, job_id):
     return graph
 
 
+def _patch_images(template, required, images, prefix):
+    graph = copy.deepcopy(template)
+    for node_id, expected in required.items():
+        if graph.get(node_id, {}).get("class_type") != expected:
+            raise ValueError("Configured workflow does not match the reviewed graph.")
+    for node_id, filename in images.items():
+        if not isinstance(filename, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+\.png", filename):
+            raise ValueError("Expected a worker-generated Comfy input filename.")
+        graph[node_id]["inputs"]["image"] = filename
+    for node_id, node in graph.items():
+        if node["class_type"] == "SaveImage":
+            node["inputs"]["filename_prefix"] = f"{prefix}/node{node_id}"
+    return graph
+
+
+def patch_styled_graph(template, *, base_image, garment_image, key):
+    """One-time garment render: the base model keeps his own face while wearing the garment."""
+    required = {"1": "LoadImage", "32": "LoadImage", "24": "SaveImage", "35": "SaveImage"}
+    return _patch_images(template, required, {"1": base_image, "32": garment_image}, f"GarmentStyled/{safe_id(key)}")
+
+
+def patch_swap_graph(template, *, selfie_image, styled_image, styled_2k_image, job_id):
+    """Per-scan face swap onto the cached garment render; identity is the only thing taken from the selfie."""
+    required = {"1": "LoadImage", "2": "LoadImage", "3": "LoadImage", "4": "AdvancedSwapFaceImage",
+                "5": "AdvancedSwapFaceImage", "6": "SaveImage", "7": "SaveImage"}
+    graph = _patch_images(template, required, {"1": selfie_image, "2": styled_image, "3": styled_2k_image},
+                          f"CloudTryOn/{safe_id(job_id)}")
+    if any(graph[node_id]["inputs"].get("api_token") != "-1" for node_id in ("4", "5")):
+        raise ValueError("Face swap must run locally; remote swap APIs are not allowed.")
+    return graph
+
+
 class ComfyClient:
     def __init__(self, base_url="http://127.0.0.1:8188", session=None):
         parsed = urlsplit(base_url)
@@ -130,7 +162,7 @@ class ComfyClient:
                                                      "extra_data": {"firebase_job_id": job_id}})
         return result["prompt_id"]
 
-    def wait_generation(self, prompt_id, guard, progress, *, timeout=3600, interval=3):
+    def wait_generation(self, prompt_id, guard, progress, *, timeout=3600, interval=3.0):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             guard()

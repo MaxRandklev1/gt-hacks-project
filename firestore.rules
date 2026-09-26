@@ -104,6 +104,14 @@ service cloud.firestore {
           && validMeasurements(profile()) && profile().measurementSystem in ['us','metric']
           && profile().consentVersion == 'identity-training-v1';
       }
+      // Version 5: one recent selfie is the face-swap identity; no photo set or training.
+      function enrollRequest(data) {
+        return data.requestVersion == 5
+          && data.keys().hasOnly(['uid','kind','status','requestVersion','createdAt','uploadId','selfiePath','selfieSource','selfieSelectedAt','selfieCapturedAt'])
+          && validUploadId(data.uploadId) && data.selfiePath == photoPath('selfie') && validReference(data)
+          && validMeasurements(profile()) && profile().measurementSystem in ['us','metric']
+          && profile().consentVersion == 'identity-training-v1' && profile().consentAt is timestamp;
+      }
       function generationRequest(data) {
         return data.keys().hasOnly(['uid','kind','status','requestVersion','createdAt','garmentId'])
           && data.garmentId is string && data.garmentId.matches('^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$')
@@ -111,13 +119,14 @@ service cloud.firestore {
           && profile().identity.status == 'ready';
       }
       allow create: if request.auth != null && owner(request.resource.data.uid)
-        && request.resource.data.requestVersion is int && request.resource.data.requestVersion in [2,3,4]
+        && request.resource.data.requestVersion is int && request.resource.data.requestVersion in [2,3,4,5]
         && request.resource.data.status == 'queued'
         && request.resource.data.createdAt == request.time
         && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)/queue/current).data.jobId == jobId
         && ((request.resource.data.kind == 'train' && trainRequest(request.resource.data))
           || (request.resource.data.kind == 'generate' && generationRequest(request.resource.data))
-          || (request.resource.data.kind == 'finalize' && finalizeRequest(request.resource.data)));
+          || (request.resource.data.kind == 'finalize' && finalizeRequest(request.resource.data))
+          || (request.resource.data.kind == 'enroll' && enrollRequest(request.resource.data)));
     }
   }
 }

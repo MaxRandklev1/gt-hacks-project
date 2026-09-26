@@ -97,87 +97,49 @@ describe('Authentication return and account boundaries', () => {
     let photo = 0;
     vi.stubGlobal('document', { createElement: () => ({ getContext: () => ({ drawImage: vi.fn() }), toBlob: (done: (blob: Blob) => void) => done(new Blob([`unique-photo-${photo++}`])) }) });
   }
-  const eightPhotos = () => Array.from({ length: 8 }, (_, i) => new File([`photo${i}`], `photo${i}.jpg`, { type: 'image/jpeg' }));
-  const reference = (source: 'camera' | 'upload' = 'camera') => {
+  const selfieInput = (source: 'camera' | 'upload' = 'camera', consent = true) => {
     const now = Date.now();
-    return { trainingJobId: 'training-1', selfie: new File(['selfie'], source === 'camera' ? 'selfie.jpg' : 'recent.png', { type: source === 'camera' ? 'image/jpeg' : 'image/png', lastModified: 1 }), selfieSource: source, selfieSelectedAt: now, ...(source === 'camera' ? { selfieCapturedAt: now } : {}), consent: true };
+    return { selfie: new File(['selfie'], source === 'camera' ? 'selfie.jpg' : 'recent.png', { type: source === 'camera' ? 'image/jpeg' : 'image/png', lastModified: 1 }), selfieSource: source, selfieSelectedAt: now, ...(source === 'camera' ? { selfieCapturedAt: now } : {}), consent };
   };
-  const trainingSnapshot = () => ({ exists: () => true, data: () => ({ uid: userA.uid, kind: 'train', requestVersion: 4, status: 'running' }) });
   function completedUpload() {
     mocks.upload.mockImplementation(() => ({ on: (_event: string, progress: (snapshot: unknown) => void, _error: unknown, complete: () => void) => { progress({ bytesTransferred: 1, totalBytes: 1 }); complete(); } }));
   }
 
-  it('requires explicit training consent before uploading any photos', async () => {
+  it('requires consent before uploading the selfie', async () => {
     mocks.auth.currentUser = userA;
-    const { startTraining } = await import('../web/src/lib/client');
-    await expect(startTraining({ photos: eightPhotos(), consent: false })).rejects.toThrow(/allow identity training/);
+    const { startEnrollment } = await import('../web/src/lib/client');
+    await expect(startEnrollment(selfieInput('camera', false))).rejects.toThrow(/Confirm that this selfie/);
     expect(mocks.upload).not.toHaveBeenCalled();
     expect(mocks.transaction).not.toHaveBeenCalled();
   });
 
-  it('queues identity training after eight uploads without waiting for measurements or a selfie', async () => {
+  it.each(['camera', 'upload'] as const)('queues a version-5 enrollment from one %s selfie, without photos or training', async source => {
     imagePreparation(); completedUpload();
     const write = vi.fn();
     mocks.transaction.mockImplementation(async (_db, update) => update({ get: async () => ({ exists: () => false }), set: write }));
     mocks.auth.currentUser = userA;
-    const { startTraining } = await import('../web/src/lib/client');
+    const input = selfieInput(source);
+    const { startEnrollment } = await import('../web/src/lib/client');
     const progress = vi.fn();
-    expect(await startTraining({ photos: eightPhotos(), consent: true }, progress)).toBe('new-job');
-    expect(mocks.upload).toHaveBeenCalledTimes(8);
-    expect(progress).toHaveBeenLastCalledWith(1);
-    const job = write.mock.calls.map(call => call[1]).find(data => data.kind === 'train');
-    expect(job).toMatchObject({ requestVersion: 4, uid: userA.uid, status: 'queued' });
-    expect(job.photoPaths).toHaveLength(8);
-    expect(job).not.toHaveProperty('selfiePath');
-    expect(write.mock.calls.some(call => call[1].consentVersion)).toBe(true);
-    expect(write.mock.calls.every(call => !('heightCm' in call[1]))).toBe(true);
-  });
-
-  it('does not enqueue training when the account changes during the eighth upload', async () => {
-    imagePreparation();
-    let upload = 0;
-    mocks.upload.mockImplementation(() => ({ on: (_event: string, _progress: unknown, _error: unknown, complete: () => void) => { if (++upload === 8) mocks.auth.currentUser = userB; complete(); } }));
-    const { startTraining } = await import('../web/src/lib/client');
-    mocks.auth.currentUser = userA;
-    await expect(startTraining({ photos: eightPhotos(), consent: true })).rejects.toThrow(/account changed/i);
-    expect(mocks.upload).toHaveBeenCalledTimes(8);
-    expect(mocks.transaction).not.toHaveBeenCalled();
-  });
-
-  it.each(['camera', 'upload'] as const)('saves a %s reference independently while its photo training is running', async source => {
-    imagePreparation(); completedUpload();
-    const write = vi.fn();
-    mocks.transaction.mockImplementation(async (_db, update) => update({ get: async () => trainingSnapshot(), set: write }));
-    mocks.auth.currentUser = userA;
-    const input = reference(source);
-    const { saveOnboardingReference } = await import('../web/src/lib/client');
-    const saved = await saveOnboardingReference(input);
+    expect(await startEnrollment(input, progress)).toBe('new-job');
     expect(mocks.upload).toHaveBeenCalledTimes(1);
-    expect(saved.selfiePath).toMatch(/^users\/account-a\/uploads\/[a-f0-9-]+\/selfie\.jpg$/);
-    expect(saved).toMatchObject({ trainingJobId: 'training-1', selfieSource: source, selfieSelectedAt: { captureMillis: input.selfieSelectedAt } });
-    if (source === 'camera') expect(saved.selfieCapturedAt).toEqual({ captureMillis: input.selfieSelectedAt });
-    else expect(saved).not.toHaveProperty('selfieCapturedAt');
-    expect(write).toHaveBeenCalledWith(expect.objectContaining({ path: 'users/account-a/onboarding/current' }), saved);
-    expect(write.mock.calls.some(call => call[1].kind)).toBe(false);
+    expect(progress).toHaveBeenLastCalledWith(1);
+    const job = write.mock.calls.map(call => call[1]).find(data => data.kind === 'enroll');
+    expect(job).toMatchObject({ requestVersion: 5, uid: userA.uid, status: 'queued', selfieSource: source, selfieSelectedAt: { captureMillis: input.selfieSelectedAt } });
+    expect(job.selfiePath).toBe(`users/account-a/uploads/${job.uploadId}/selfie.jpg`);
+    expect(job).not.toHaveProperty('photoPaths');
+    if (source === 'camera') expect(job.selfieCapturedAt).toEqual({ captureMillis: input.selfieSelectedAt });
+    else expect(job).not.toHaveProperty('selfieCapturedAt');
+    expect(write.mock.calls.some(call => call[1].consentVersion)).toBe(true);
   });
 
-  it('does not attach a selfie after the account switches during its upload', async () => {
+  it('does not enqueue enrollment when the account changes during the selfie upload', async () => {
     imagePreparation();
     mocks.upload.mockImplementation(() => ({ on: (_event: string, _progress: unknown, _error: unknown, complete: () => void) => { mocks.auth.currentUser = userB; complete(); } }));
     mocks.auth.currentUser = userA;
-    const { saveOnboardingReference } = await import('../web/src/lib/client');
-    await expect(saveOnboardingReference(reference())).rejects.toThrow(/account changed/i);
+    const { startEnrollment } = await import('../web/src/lib/client');
+    await expect(startEnrollment(selfieInput())).rejects.toThrow(/account changed/i);
     expect(mocks.transaction).not.toHaveBeenCalled();
-  });
-
-  it('does not attach a selfie after an account switch during training verification', async () => {
-    imagePreparation(); completedUpload();
-    const write = vi.fn();
-    mocks.transaction.mockImplementation(async (_db, update) => update({ get: async () => { mocks.auth.currentUser = userB; return trainingSnapshot(); }, set: write }));
-    mocks.auth.currentUser = userA;
-    const { saveOnboardingReference } = await import('../web/src/lib/client');
-    await expect(saveOnboardingReference(reference())).rejects.toThrow(/account changed/i);
-    expect(write).not.toHaveBeenCalled();
   });
 
   it('does not save measurements to a stale account after its transaction read', async () => {
@@ -199,22 +161,17 @@ describe('Authentication return and account boundaries', () => {
     expect(write).toHaveBeenCalledWith(expect.objectContaining({ path: 'users/account-a' }), { heightCm: 177.8, weightKg: 68.04, measurementSystem: 'us', updatedAt: 'timestamp' }, { merge: true });
   });
 
-  it.each(['queued', 'running', 'completed'])('reuses an existing %s finalization across browser retries', async status => {
+  it('reuses an in-flight try-on of the same garment and queues new requests as version 5', async () => {
+    const garment = { exists: () => true, data: () => ({ active: true, name: 'Tee' }), id: 'tee' };
+    mocks.getDoc.mockResolvedValue(garment);
     const write = vi.fn();
-    mocks.transaction.mockImplementation(async (_db, update) => update({ get: async (target: { path: string }) => target.path.endsWith('/queue/current') ? { exists: () => true, data: () => ({ jobId: 'existing-finalize' }) } : { id: 'existing-finalize', exists: () => true, data: () => ({ kind: 'finalize', trainingJobId: 'training-1', status }) }, set: write }));
+    mocks.transaction.mockImplementation(async (_db, update) => update({ get: async (target: { path: string }) => target.path.endsWith('/queue/current') ? { exists: () => true, data: () => ({ jobId: 'running-tee' }) } : { id: 'running-tee', exists: () => true, data: () => ({ kind: 'generate', garmentId: 'tee', status: 'running' }) }, set: write }));
     mocks.auth.currentUser = userA;
-    const { requestFinalization } = await import('../web/src/lib/client');
-    expect(await requestFinalization('training-1')).toBe('existing-finalize');
+    const { requestGeneration } = await import('../web/src/lib/client');
+    expect(await requestGeneration('tee')).toBe('running-tee');
     expect(write).not.toHaveBeenCalled();
-  });
-
-  it('allows a failed finalization to be retried with a small v4 job', async () => {
-    const write = vi.fn();
-    mocks.transaction.mockImplementation(async (_db, update) => update({ get: async (target: { path: string }) => target.path.endsWith('/queue/current') ? { exists: () => true, data: () => ({ jobId: 'failed-finalize' }) } : { id: 'failed-finalize', exists: () => true, data: () => ({ kind: 'finalize', trainingJobId: 'training-1', status: 'failed' }) }, set: write }));
-    mocks.auth.currentUser = userA;
-    const { requestFinalization } = await import('../web/src/lib/client');
-    await requestFinalization('training-1');
-    const job = write.mock.calls.map(call => call[1]).find(data => data.kind === 'finalize');
-    expect(job).toEqual({ kind: 'finalize', trainingJobId: 'training-1', requestVersion: 4, uid: userA.uid, status: 'queued', createdAt: 'timestamp' });
+    mocks.transaction.mockImplementation(async (_db, update) => update({ get: async () => ({ exists: () => false }), set: write }));
+    await requestGeneration('tee');
+    expect(write.mock.calls.map(call => call[1]).find(data => data.kind === 'generate')).toMatchObject({ garmentId: 'tee', requestVersion: 5 });
   });
 });

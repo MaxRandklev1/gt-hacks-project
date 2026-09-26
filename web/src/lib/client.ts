@@ -3,19 +3,18 @@ import { getAuth, GoogleAuthProvider, signInWithRedirect, getRedirectResult, onA
 import { getFirestore, doc, collection, onSnapshot, query, where, orderBy, limit, getDoc, runTransaction, serverTimestamp, connectFirestoreEmulator, Timestamp } from 'firebase/firestore';
 import { connectAuthEmulator } from 'firebase/auth';
 import { getStorage, ref, uploadBytesResumable, getBlob, connectStorageEmulator } from 'firebase/storage';
-import { CONSENT_VERSION, validateMeasurements, validatePhotoFiles, validateReferenceSelfie } from './validation';
+import { CONSENT_VERSION, validateMeasurements, validateReferenceSelfie } from './validation';
 
 export type SessionUser = Pick<User, 'uid' | 'displayName' | 'email' | 'photoURL'>;
 export type PhotoSelection = { index: number; selected: boolean; score: number; reason: string };
 export type UserProfile = {
   displayName?: string; email?: string; photoURL?: string; heightCm?: number; weightKg?: number; measurementSystem?: 'us' | 'metric';
   trainingJobId?: string;
-  identity?: { status: 'selecting' | 'training' | 'awaiting_reference' | 'ready' | 'failed'; selectedPhotos?: PhotoSelection[]; error?: string; version?: string; profileId?: string };
+  identity?: { status: 'selecting' | 'training' | 'awaiting_reference' | 'ready' | 'failed'; mode?: 'faceswap'; selectedPhotos?: PhotoSelection[]; error?: string; version?: string; profileId?: string };
 };
-export type Job = { id: string; uid: string; kind: 'train' | 'finalize' | 'generate'; requestVersion?: number; trainingJobId?: string; status: 'queued' | 'running' | 'completed' | 'failed'; stage?: string; message?: string; progress?: number; error?: string; garmentId?: string; createdAt?: Timestamp };
-export type OnboardingDraft = { trainingJobId: string; uploadId: string; selfiePath: string; selfieSource: 'camera' | 'upload'; selfieSelectedAt: Timestamp; selfieCapturedAt?: Timestamp; submittedAt?: unknown };
+export type Job = { id: string; uid: string; kind: 'train' | 'finalize' | 'enroll' | 'generate'; requestVersion?: number; trainingJobId?: string; status: 'queued' | 'running' | 'completed' | 'failed'; stage?: string; message?: string; progress?: number; error?: string; garmentId?: string; createdAt?: Timestamp };
 export type Garment = { id: string; name: string; brand?: string; description?: string; imagePath: string; baseImagePath: string; thumbnailPath?: string; active: boolean };
-export type Generation = { id: string; garmentId: string; garmentName: string; status: string; imagePath?: string; image4kPath?: string; createdAt?: Timestamp; error?: string };
+export type Generation = { id: string; garmentId: string; garmentName: string; status: string; imagePath?: string; image2kPath?: string; image4kPath?: string; createdAt?: Timestamp; error?: string };
 const config = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
@@ -112,9 +111,6 @@ export function subscribeAuth(callback: (user: SessionUser | null) => void, onEr
 export function subscribeProfile(uid: string, callback: (profile: UserProfile | null) => void, onError?: (error: Error) => void) {
   return onSnapshot(doc(services().db, 'users', uid), snap => callback(snap.exists() ? snap.data() as UserProfile : null), onError);
 }
-export function subscribeOnboarding(uid: string, callback: (draft: OnboardingDraft | null) => void, onError?: (error: Error) => void) {
-  return onSnapshot(doc(services().db, 'users', uid, 'onboarding', 'current'), snap => callback(snap.exists() ? snap.data() as OnboardingDraft : null), onError);
-}
 export function subscribeJobs(uid: string, callback: (jobs: Job[]) => void, onError?: (error: Error) => void) {
   return onSnapshot(query(collection(services().db, 'jobs'), where('uid', '==', uid), orderBy('createdAt', 'desc'), limit(25)), snap => callback(snap.docs.map(d => ({ ...d.data(), id: d.id }) as Job)), onError);
 }
@@ -144,7 +140,6 @@ async function enqueue(uid: string, payload: Record<string, unknown>, profileFie
     if (current.exists()) {
       const previous = await tx.get(doc(db, 'jobs', current.data().jobId));
       assertAccount(uid);
-      if (payload.kind === 'finalize' && previous.exists() && previous.data().kind === 'finalize' && previous.data().trainingJobId === payload.trainingJobId && ['queued', 'running', 'completed'].includes(previous.data().status)) return previous.id;
       if (previous.exists() && ['queued', 'running'].includes(previous.data().status)) {
         if (payload.kind === 'generate' && previous.data().kind === 'generate' && previous.data().garmentId === payload.garmentId) return previous.id;
         throw new Error('Your previous request is still processing. It will continue even if you close this page.');
@@ -152,7 +147,7 @@ async function enqueue(uid: string, payload: Record<string, unknown>, profileFie
     }
     assertAccount(uid);
     if (profileFields) tx.set(doc(db, 'users', user.uid), profileFields, { merge: true });
-    tx.set(job, { ...payload, uid: user.uid, status: 'queued', requestVersion: 4, createdAt: serverTimestamp() });
+    tx.set(job, { ...payload, uid: user.uid, status: 'queued', requestVersion: 5, createdAt: serverTimestamp() });
     tx.set(lock, { jobId: job.id, updatedAt: serverTimestamp() });
     return job.id;
   });
@@ -171,24 +166,6 @@ async function cleanPhoto(file: File): Promise<Blob> {
     return await new Promise<Blob>((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('Could not prepare this photo.')), 'image/jpeg', 0.94));
   } finally { bitmap.close(); }
 }
-export async function startTraining(input: { photos: File[]; consent: boolean }, onProgress?: (progress: number) => void) {
-  validatePhotoFiles(input.photos);
-  if (!input.consent) throw new Error('Please confirm these are your photos and allow identity training.');
-  const { storage, user } = signedIn();
-  const cleaned = await Promise.all(input.photos.map(cleanPhoto));
-  const hashes = await Promise.all(cleaned.map(async blob => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', await blob.arrayBuffer()))).join(',')));
-  if (new Set(hashes).size !== 8) throw new Error('Some photos are duplicates. Choose eight different photos.');
-  const uploadId = crypto.randomUUID();
-  const paths: string[] = [];
-  for (let index = 0; index < cleaned.length; index++) {
-    assertAccount(user.uid);
-    const path = `users/${user.uid}/uploads/${uploadId}/${index}.jpg`;
-    const task = uploadBytesResumable(ref(storage, path), cleaned[index], { contentType: 'image/jpeg', customMetadata: { owner: user.uid } });
-    await new Promise<void>((resolve, reject) => task.on('state_changed', snapshot => onProgress?.((index + snapshot.bytesTransferred / snapshot.totalBytes) / 8), reject, resolve));
-    paths.push(path);
-  }
-  return enqueue(user.uid, { kind: 'train', uploadId, photoPaths: paths }, { consentVersion: CONSENT_VERSION, consentAt: serverTimestamp(), updatedAt: serverTimestamp() });
-}
 export async function saveMeasurements(input: { heightCm: number; weightKg: number; measurementSystem: 'us' | 'metric' }) {
   validateMeasurements(input.heightCm, input.weightKg);
   if (!['us', 'metric'].includes(input.measurementSystem)) throw new Error('Choose US or metric measurements.');
@@ -200,35 +177,24 @@ export async function saveMeasurements(input: { heightCm: number; weightKg: numb
     tx.set(doc(db, 'users', user.uid), { ...input, updatedAt: serverTimestamp() }, { merge: true });
   });
 }
-export async function saveOnboardingReference(input: { trainingJobId: string; selfie: File; selfieSource: 'camera' | 'upload'; selfieSelectedAt: number; selfieCapturedAt?: number; consent: boolean }, onProgress?: (progress: number) => void): Promise<OnboardingDraft> {
-  if (!input.consent) throw new Error('Confirm that this selfie is of you and shows your current haircut and facial hair.');
-  if (!/^[a-zA-Z0-9_-]{1,128}$/.test(input.trainingJobId)) throw new Error('Start your photo training before choosing a reference.');
+/** Version-5 onboarding: one selfie becomes the face-swap identity. No photo set or training. */
+export async function startEnrollment(input: { selfie: File; selfieSource: 'camera' | 'upload'; selfieSelectedAt: number; selfieCapturedAt?: number; consent: boolean }, onProgress?: (progress: number) => void) {
+  if (!input.consent) throw new Error('Confirm that this selfie is of you and agree to use it for your try-ons.');
   const selection = { source: input.selfieSource, selectedAt: input.selfieSelectedAt, capturedAt: input.selfieCapturedAt };
   validateReferenceSelfie(input.selfie, selection);
-  const { storage, db, user } = signedIn();
+  const { storage, user } = signedIn();
   const selfie = await cleanPhoto(input.selfie);
   const uploadId = crypto.randomUUID();
   assertAccount(user.uid);
   const selfiePath = `users/${user.uid}/uploads/${uploadId}/selfie.jpg`;
-  const selfieTask = uploadBytesResumable(ref(storage, selfiePath), selfie, { contentType: 'image/jpeg', customMetadata: { owner: user.uid, source: input.selfieSource === 'camera' ? 'onboarding-camera' : 'onboarding-upload' } });
-  await new Promise<void>((resolve, reject) => selfieTask.on('state_changed', snapshot => onProgress?.(snapshot.bytesTransferred / snapshot.totalBytes), reject, resolve));
-  assertAccount(user.uid);
-  const draft: OnboardingDraft = { trainingJobId: input.trainingJobId, uploadId, selfiePath, selfieSource: input.selfieSource, selfieSelectedAt: Timestamp.fromMillis(input.selfieSelectedAt), ...(input.selfieSource === 'camera' ? { selfieCapturedAt: Timestamp.fromMillis(input.selfieCapturedAt!) } : {}), submittedAt: serverTimestamp() };
-  await runTransaction(db, async tx => {
-    assertAccount(user.uid);
-    const training = await tx.get(doc(db, 'jobs', input.trainingJobId));
-    assertAccount(user.uid);
-    if (!training.exists() || training.data().uid !== user.uid || training.data().kind !== 'train' || training.data().requestVersion !== 4 || training.data().status === 'failed') throw new Error('This photo training is no longer available. Start again with your eight photos.');
-    validateReferenceSelfie(input.selfie, selection);
-    tx.set(doc(db, 'users', user.uid, 'onboarding', 'current'), draft);
-  });
-  assertAccount(user.uid);
-  return draft;
-}
-export async function requestFinalization(trainingJobId: string) {
-  const { user } = signedIn();
-  if (!/^[a-zA-Z0-9_-]{1,128}$/.test(trainingJobId)) throw new Error('Your photo training could not be found.');
-  return enqueue(user.uid, { kind: 'finalize', trainingJobId });
+  const task = uploadBytesResumable(ref(storage, selfiePath), selfie, { contentType: 'image/jpeg', customMetadata: { owner: user.uid, source: input.selfieSource === 'camera' ? 'onboarding-camera' : 'onboarding-upload' } });
+  await new Promise<void>((resolve, reject) => task.on('state_changed', snapshot => onProgress?.(snapshot.bytesTransferred / snapshot.totalBytes), reject, resolve));
+  validateReferenceSelfie(input.selfie, selection);
+  return enqueue(user.uid, {
+    kind: 'enroll', uploadId, selfiePath, selfieSource: input.selfieSource,
+    selfieSelectedAt: Timestamp.fromMillis(input.selfieSelectedAt),
+    ...(input.selfieSource === 'camera' ? { selfieCapturedAt: Timestamp.fromMillis(input.selfieCapturedAt!) } : {}),
+  }, { consentVersion: CONSENT_VERSION, consentAt: serverTimestamp(), updatedAt: serverTimestamp() });
 }
 export async function requestGeneration(garmentId: string) {
   const { user } = signedIn();

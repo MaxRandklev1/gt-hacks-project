@@ -10,13 +10,15 @@ from services.worker.worker import JobError, check_readiness, main
 
 
 TEMPLATE = Path(__file__).resolve().parents[3] / "comfy-identity/Qwen21_Universal_TryOn_4K.api.json"
+STYLED = Path(__file__).resolve().parents[3] / "comfy-identity/Qwen21_Garment_Styled_2K.api.json"
+SWAP = Path(__file__).resolve().parents[3] / "comfy-identity/FaceSwap_TryOn_2K.api.json"
 
 
 def inputs():
     graph = json.loads(TEMPLATE.read_text())
     schemas = {}
     model_keys = {"unet_name", "clip_name", "vae_name", "lora_name", "bg_removal_name", "model_name"}
-    for node in graph.values():
+    for node in [node for path in (TEMPLATE, STYLED, SWAP) for node in json.loads(path.read_text()).values()]:
         required = schemas.setdefault(node["class_type"], {"input": {"required": {}}})["input"]["required"]
         for key, value in node["inputs"].items():
             if key in model_keys:
@@ -46,6 +48,15 @@ class ReadinessTests(unittest.TestCase):
         store.bucket.list_blobs.assert_called_once_with(prefix="garments/", max_results=1)
         store.bucket.reload.assert_not_called()
         self.assertNotIn(temp, json.dumps(result))
+
+    def test_fast_path_graphs_are_checked_for_missing_nodes(self):
+        graph, schemas, comfy, store = inputs()
+        del schemas["AdvancedSwapFaceImage"]
+        with tempfile.TemporaryDirectory() as temp:
+            self.assertTrue(check_readiness(store, comfy, temp, graph)["ready"])  # Legacy-only check.
+            with self.assertRaises(JobError):
+                check_readiness(store, comfy, temp, graph, None, json.loads(STYLED.read_text()), json.loads(SWAP.read_text()))
+        comfy.submit.assert_not_called()
 
     def test_missing_models_fail_before_firebase_or_gpu_work(self):
         graph, schemas, comfy, store = inputs()

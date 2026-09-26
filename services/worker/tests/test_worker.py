@@ -399,7 +399,7 @@ class WorkerTests(unittest.TestCase):
             comfy.create_profile.assert_not_called()
             comfy.submit.assert_not_called()
 
-    def test_generation_uses_catalog_and_publishes_two_private_results(self):
+    def test_qwen_generation_uses_catalog_and_publishes_two_private_results(self):
         with tempfile.TemporaryDirectory() as temp:
             folder = Path(temp)
             store, comfy, profiles, lease = Mock(), Mock(), Mock(), Mock()
@@ -411,7 +411,7 @@ class WorkerTests(unittest.TestCase):
             comfy.wait_generation.return_value = {"outputs": {}}
             comfy.output.side_effect = [png((16, 16), metadata=True), png((64, 64), metadata=True)]
             template = json.loads((Path(__file__).resolve().parents[3] / "comfy-identity/Qwen21_Universal_TryOn_4K.api.json").read_text())
-            worker = Worker(store, comfy, profiles, template, folder / "state", selector=Mock())
+            worker = Worker(store, comfy, profiles, template, folder / "state", selector=Mock(), pipeline="qwen")
             worker.identity_profile = Mock(return_value="alice-profile")
             worker.generate("gen1", {"garmentId": "shirt"}, "alice", {"identity": {"status": "ready"}}, folder, lease)
             graph = comfy.submit.call_args.args[0]

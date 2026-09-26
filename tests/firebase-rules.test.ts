@@ -368,13 +368,13 @@ describe('Version-3 camera and uploaded references', () => {
 });
 
 describe('Generation requirements', () => {
-  it.each([2, 3, 4])('accepts version %s generation with a server-ready identity and active garment', async requestVersion => {
+  it.each([2, 3, 4, 5])('accepts version %s generation with a server-ready identity and active garment', async requestVersion => {
     await seedProfile(ALICE, { identity: { status: 'ready', version: 'trained' } });
     await seed({ 'garments/coat-1': { active: true } });
     await assertSucceeds(enqueue('generation', generate({ requestVersion })));
   });
 
-  it.each([1, 5, '2', '3', '4', 2.5, 3.5, null, true])('rejects new generation request version %s', async requestVersion => {
+  it.each([1, 6, '2', '3', '4', '5', 2.5, 3.5, null, true])('rejects new generation request version %s', async requestVersion => {
     await seedProfile(ALICE, { identity: { status: 'ready', version: 'trained' } });
     await seed({ 'garments/coat-1': { active: true } });
     await assertFails(enqueue('wrong-generation-version', generate({ requestVersion })));
@@ -518,6 +518,43 @@ describe('Photos-first onboarding and deferred reference finalization', () => {
 function upload(path = photoPath, uid = ALICE, contentType = 'image/jpeg', data = new Uint8Array([1, 2, 3])) {
   return Promise.resolve(env.authenticatedContext(uid).storage().ref(path).put(data, { contentType }));
 }
+
+describe('Selfie-only version-5 enrollment', () => {
+  const enroll = (selfieSource: 'camera' | 'upload' = 'upload', extra: Record<string, unknown> = {}) => {
+    const selected = capturedAt();
+    const payload: Record<string, unknown> = { uid: ALICE, kind: 'enroll', status: 'queued', requestVersion: 5, createdAt: stamp(), uploadId: UPLOAD_ID, selfiePath: selfiePathFor(), selfieSource, selfieSelectedAt: selected, selfieCapturedAt: selected };
+    if (selfieSource === 'upload') delete payload.selfieCapturedAt;
+    return { ...payload, ...extra };
+  };
+
+  it.each(['camera', 'upload'] as const)('accepts one %s selfie with measurements and consent in the same commit', async source => {
+    await seed({ [`users/${ALICE}`]: { ...userData(), heightCm: 180, weightKg: 75, measurementSystem: 'us' } });
+    const db = dbFor(); const batch = db.batch();
+    batch.set(db.doc(`users/${ALICE}`), { consentVersion: 'identity-training-v1', consentAt: stamp(), updatedAt: stamp() }, { merge: true });
+    batch.set(db.doc('jobs/enroll-1'), enroll(source));
+    batch.set(db.doc(`users/${ALICE}/queue/current`), { jobId: 'enroll-1', updatedAt: stamp() });
+    await assertSucceeds(batch.commit());
+  });
+  it('requires consent, measurements and a unit preference', async () => {
+    await seed({ [`users/${ALICE}`]: { ...userData(), heightCm: 180, weightKg: 75, measurementSystem: 'us' } });
+    await assertFails(enqueue('no-consent', enroll()));
+    await seedProfile();
+    await assertFails(enqueue('no-units', enroll()));
+  });
+  it('rejects photo sets, foreign or stale selfies, forged capture times and wrong versions', async () => {
+    await seedProfile(ALICE, { measurementSystem: 'us' });
+    for (const [id, payload] of Object.entries({
+      photos: enroll('upload', { photoPaths: paths() }), foreign: enroll('upload', { selfiePath: selfiePathFor(BOB) }),
+      stale: enroll('upload', { selfieSelectedAt: capturedAt(-2 * 60 * 60 * 1000) }), forged: enroll('upload', { selfieCapturedAt: capturedAt() }),
+      v4: enroll('upload', { requestVersion: 4 }), steps: enroll('upload', { steps: 80 }), uid: enroll('upload', { uid: BOB }),
+    })) await assertFails(enqueue(`bad-${id}`, payload));
+  });
+  it('lets a ready face-swap identity request a version-5 generation', async () => {
+    await seedProfile(ALICE, { measurementSystem: 'us', identity: { status: 'ready', mode: 'faceswap', version: 'enroll-1' } });
+    await seed({ 'garments/coat-1': { active: true, name: 'Coat' } });
+    await assertSucceeds(enqueue('gen-v5', generate({ requestVersion: 5 })));
+  });
+});
 
 describe('Storage ownership and immutable uploads', () => {
   it('allows a new owner upload and owner read, but denies other-user and anonymous reads', async () => {
