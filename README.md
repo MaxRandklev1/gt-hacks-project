@@ -1,6 +1,6 @@
 # THREAD — GT Hacks virtual try-on
 
-**Live app: [gt-hacks-thread-2026.firebaseapp.com](https://gt-hacks-thread-2026.firebaseapp.com)** · **[Printable demo shirt tag](docs/tags/demo-shirt.html)**
+**Live app: [gt-hacks-thread-2026.firebaseapp.com](https://gt-hacks-thread-2026.firebaseapp.com)** · **[Three demo QR codes](https://gt-hacks-thread-2026.firebaseapp.com/tags/demo-clothes.html)**
 
 THREAD is a deployed virtual try-on web app backed by Firebase and a local ComfyUI/Qwen Image 2.1 GPU worker. A garment QR code opens its item in the app. Onboarding collects Google sign-in, eight uploaded photos, a separate required reference selfie, measurements and training consent. The worker selects five of the eight uploads to train a reusable personal identity adapter; the selfie stays separate and is the sole identity image reference for that new profile's try-ons. Later try-ons reuse the adapter and selfie, saving both the original and 4096 × 4096 result to the account's private history.
 
@@ -10,7 +10,15 @@ The project currently works on **still images**. Firebase hosts the app, authent
 
 ## Run the deployed demo
 
-Open the [app](https://gt-hacks-thread-2026.firebaseapp.com), or print [docs/tags/demo-shirt.html](docs/tags/demo-shirt.html) at actual size with its QR border intact. The tag links to the demo garment; a new account retains that selection through onboarding. Training and rendering take minutes, so prepare a demo account in advance when possible.
+Open the [three-code demo page](https://gt-hacks-thread-2026.firebaseapp.com/tags/demo-clothes.html) on a PC and scan a code with a phone. Each card also opens a larger code. The [local copy](docs/tags/demo-clothes.html) and individual tags can be displayed offline or printed with their white QR borders intact; the phone needs internet for the app. A new account retains the scanned selection through onboarding. Training and rendering take minutes, so prepare a demo account in advance when possible. Scan one piece at a time and wait for its result before starting the next.
+
+| Tag | Local garment source | Clothing |
+| --- | --- | --- |
+| `thread-1` | `ClothesSwap/THREAD1.png` | Navy and white striped polo |
+| `thread-2` | `ClothesSwap/THREAD2.png` | Dragon graphic T-shirt |
+| `thread-3` | `ClothesSwap/THREAD3.png` | Olive hooded jacket |
+
+All three active Firebase catalog entries use the existing white-shirt pose image as their base. Their stored garment/base images were checked against the normalized source files. `pnpm qr:demo` regenerates both the local tags and `web/public/tags/` copies; build and deploy Hosting to publish them. The earlier `demo-shirt` tag remains available.
 
 Keep the **GPU PC, ComfyUI and local worker online**. On the configured Windows machine, start ComfyUI, then run this from the repository root:
 

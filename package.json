@@ -11,7 +11,8 @@
     "test:rules": "firebase emulators:exec --project demo-thread-tryon --only firestore,storage \"vitest run tests/firebase-rules.test.ts\"",
     "emulators": "firebase emulators:start --project demo-thread-tryon --only auth,firestore,storage",
     "deploy": "pnpm run build && firebase deploy --only hosting,firestore:rules,firestore:indexes,storage",
-    "qr": "node scripts/create-garment-tag.mjs"
+    "qr": "node scripts/create-garment-tag.mjs",
+    "qr:demo": "node scripts/create-demo-tags.mjs"
   },
   "dependencies": {
     "@zxing/browser": "^0.1.5",
