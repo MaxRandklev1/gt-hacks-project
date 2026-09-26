@@ -63,7 +63,8 @@ class ComfyTests(unittest.TestCase):
             (directory / "profile.json").write_text(json.dumps({"id": "new-profile", "trigger": "new_token",
                 "photos": [{"id": "p0000", "caption": "photo of new_token"}]}))
             profiles = LocalProfiles(root)
-            profiles.restore("new-profile", "alice", {"version": "training1", "trigger": "original_person"}, b"fake-weights")
+            profiles.restore("new-profile", "alice", {"version": "training1", "trigger": "original_person", "steps": 80}, b"fake-weights")
+            self.assertEqual(profiles.read("new-profile")[1]["latest_successful"]["steps"], 80)
             path, profile = profiles.adapter("new-profile", "alice", "training1")
             self.assertEqual(path.read_bytes(), b"fake-weights")
             self.assertEqual(profile["trigger"], "original_person")

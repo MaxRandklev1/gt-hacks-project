@@ -368,19 +368,19 @@ describe('Version-3 camera and uploaded references', () => {
 });
 
 describe('Generation requirements', () => {
-  it.each([2, 3])('accepts version %s generation with a server-ready identity and active garment', async requestVersion => {
+  it.each([2, 3, 4])('accepts version %s generation with a server-ready identity and active garment', async requestVersion => {
     await seedProfile(ALICE, { identity: { status: 'ready', version: 'trained' } });
     await seed({ 'garments/coat-1': { active: true } });
     await assertSucceeds(enqueue('generation', generate({ requestVersion })));
   });
 
-  it.each([1, 4, '2', '3', 2.5, 3.5, null, true])('rejects new generation request version %s', async requestVersion => {
+  it.each([1, 5, '2', '3', '4', 2.5, 3.5, null, true])('rejects new generation request version %s', async requestVersion => {
     await seedProfile(ALICE, { identity: { status: 'ready', version: 'trained' } });
     await seed({ 'garments/coat-1': { active: true } });
     await assertFails(enqueue('wrong-generation-version', generate({ requestVersion })));
   });
 
-  it.each(['training', 'failed', 'selecting'])('blocks generation for identity status %s', async status => {
+  it.each(['training', 'failed', 'selecting', 'awaiting_reference'])('blocks generation for identity status %s', async status => {
     await seedProfile(ALICE, { identity: { status } });
     await seed({ 'garments/coat-1': { active: true } });
     await assertFails(enqueue('not-ready', generate()));
@@ -398,6 +398,123 @@ describe('Generation requirements', () => {
 });
 
 const photoPath = `users/${ALICE}/uploads/${UPLOAD_ID}/0.jpg`;
+
+describe('Photos-first onboarding and deferred reference finalization', () => {
+  const photoTrain = (extra: Record<string, unknown> = {}) => ({ uid: ALICE, kind: 'train', status: 'queued', requestVersion: 4, createdAt: stamp(), uploadId: UPLOAD_ID, photoPaths: paths(), ...extra });
+  const draft = (extra: Record<string, unknown> = {}) => ({ trainingJobId: 'early-train', uploadId: SECOND_UPLOAD_ID, selfiePath: selfiePathFor(ALICE, SECOND_UPLOAD_ID), selfieSource: 'upload', selfieSelectedAt: capturedAt(), submittedAt: stamp(), ...extra });
+  const finalJob = (extra: Record<string, unknown> = {}) => ({ uid: ALICE, kind: 'finalize', status: 'queued', requestVersion: 4, createdAt: stamp(), trainingJobId: 'early-train', ...extra });
+  const draftRef = () => dbFor().doc(`users/${ALICE}/onboarding/current`);
+  async function start() {
+    await seed({ [`users/${ALICE}`]: { ...userData(), consentVersion: 'identity-training-v1', consentAt: stamp() } });
+    await enqueue('early-train', photoTrain());
+  }
+  async function completed() {
+    await start();
+    await seedProfile(ALICE, { trainingJobId: 'early-train', measurementSystem: 'us', identity: { status: 'awaiting_reference', version: 'early-train' } });
+    await seed({ 'jobs/early-train': photoTrain({ status: 'completed' }) });
+    await draftRef().set(draft());
+  }
+
+  it('starts training from eight photos and consent without measurements or a selfie', async () => {
+    await seed({ [`users/${ALICE}`]: userData() });
+    const db = dbFor(); const batch = db.batch();
+    batch.set(db.doc(`users/${ALICE}`), { consentVersion: 'identity-training-v1', consentAt: stamp(), updatedAt: stamp() }, { merge: true });
+    batch.set(db.doc('jobs/early-train'), photoTrain());
+    batch.set(db.doc(`users/${ALICE}/queue/current`), { jobId: 'early-train', updatedAt: stamp() });
+    await assertSucceeds(batch.commit());
+    const profile = (await db.doc(`users/${ALICE}`).get()).data();
+    expect(profile).not.toHaveProperty('heightCm');
+  });
+  it('requires consent before any early training and keeps step counts server-owned', async () => {
+    await seed({ [`users/${ALICE}`]: userData() });
+    await assertFails(enqueue('no-consent', photoTrain()));
+    await seedProfile();
+    await assertFails(enqueue('injected-steps', photoTrain({ steps: 4000 })));
+    await assertFails(enqueue('injected-selfie', photoTrain({ selfiePath: selfiePathFor() })));
+  });
+  it('retains eight-photo owner, batch and unique slot restrictions', async () => {
+    await seedProfile();
+    for (const photoPaths of [paths(BOB), paths().slice(0, 7), [...paths().slice(0, 7), paths()[0]]]) await assertFails(enqueue('bad-photos', photoTrain({ photoPaths })));
+  });
+  it.each(['queued', 'running', 'completed'])('allows measurements and a saved selfie while training is %s', async status => {
+    await start(); await seed({ 'jobs/early-train': photoTrain({ status }) });
+    await assertSucceeds(dbFor().doc(`users/${ALICE}`).update({ heightCm: 177.8, weightKg: 70, measurementSystem: 'us', updatedAt: stamp() }));
+    await assertSucceeds(draftRef().set(draft()));
+    await assertSucceeds(draftRef().get());
+    await assertFails(dbFor(BOB).doc(`users/${ALICE}/onboarding/current`).get());
+  });
+  it('keeps camera provenance and freshness on drafts', async () => {
+    await start(); const time = capturedAt();
+    await assertSucceeds(draftRef().set(draft({ selfieSource: 'camera', selfieSelectedAt: time, selfieCapturedAt: time })));
+    await assertFails(draftRef().set(draft({ selfieSelectedAt: capturedAt(-3_700_000) })));
+    await assertFails(draftRef().set(draft({ selfieCapturedAt: time })));
+    await assertFails(draftRef().set(draft({ selfieSource: 'camera' })));
+    await assertFails(draftRef().set(draft({ submittedAt: capturedAt(-30_000) })));
+  });
+  it('rejects wrong owner, training version, selfie path, and arbitrary draft documents', async () => {
+    await start();
+    await assertFails(draftRef().set(draft({ selfiePath: selfiePathFor(BOB, SECOND_UPLOAD_ID) })));
+    await assertFails(draftRef().set(draft({ selfiePath: paths()[0] })));
+    await assertFails(draftRef().set(draft({ trainingJobId: 'missing' })));
+    await assertFails(dbFor(BOB).doc(`users/${ALICE}/onboarding/current`).set(draft()));
+    await assertFails(dbFor().doc(`users/${ALICE}/onboarding/other`).set(draft()));
+    await assertFails(draftRef().set(draft({ identity: { status: 'ready' } })));
+    await seed({ 'jobs/early-train': photoTrain({ requestVersion: 3 }) });
+    await assertFails(draftRef().set(draft()));
+  });
+  it('does not let an older training draft replace the current onboarding', async () => {
+    await start();
+    await seed({ 'jobs/new-train': photoTrain(), [`users/${ALICE}/queue/current`]: { jobId: 'new-train', updatedAt: stamp() } });
+    await assertFails(draftRef().set(draft()));
+  });
+  it('finalizes after either order: questions first or training first', async () => {
+    await completed();
+    await assertSucceeds(enqueue('finish', finalJob()));
+    await assertFails(draftRef().set(draft())); // frozen while consumed
+    await assertFails(draftRef().delete());
+    await assertFails(enqueue('duplicate', finalJob()));
+  });
+  it('does not expire a saved reference while training was in the queue', async () => {
+    await completed();
+    await seed({ [`users/${ALICE}/onboarding/current`]: draft({ selfieSelectedAt: capturedAt(-8_000_000), submittedAt: capturedAt(-8_000_000) }) });
+    await assertSucceeds(enqueue('delayed-finish', finalJob()));
+  });
+  it.each(['queued', 'running', 'failed'])('refuses finalization while parent training is %s', async status => {
+    await completed(); await seed({ 'jobs/early-train': photoTrain({ status }) });
+    await assertFails(enqueue('too-early', finalJob()));
+  });
+  it('requires measurements, the matching draft, and the current server-owned trained identity', async () => {
+    await completed(); await seedProfile(ALICE, { trainingJobId: 'early-train', identity: { status: 'awaiting_reference', version: 'early-train' }, heightCm: 20 });
+    await assertFails(enqueue('bad-measurements', finalJob()));
+    await seedProfile(ALICE, { trainingJobId: 'new-train', identity: { status: 'awaiting_reference', version: 'new-train' } });
+    await assertFails(enqueue('stale-training', finalJob()));
+    await seedProfile(ALICE, { trainingJobId: 'early-train', measurementSystem: 'us', identity: { status: 'awaiting_reference', version: 'early-train' } });
+    await seed({ [`users/${ALICE}/onboarding/current`]: draft({ trainingJobId: 'other' }) });
+    await assertFails(enqueue('wrong-draft', finalJob()));
+  });
+  it('refuses forged finalize inputs or parent ownership', async () => {
+    await completed();
+    await assertFails(enqueue('extra-finalize', finalJob({ selfiePath: selfiePathFor() })));
+    await assertFails(enqueue('wrong-version', finalJob({ requestVersion: 3 })));
+    await seed({ 'jobs/early-train': photoTrain({ status: 'completed', uid: BOB }) });
+    await assertFails(enqueue('foreign-parent', finalJob()));
+  });
+  it('allows a failed finalization to retake the reference and retry without retraining', async () => {
+    await completed(); await enqueue('finish', finalJob());
+    await seed({ 'jobs/finish': finalJob({ status: 'failed' }) });
+    await assertSucceeds(draftRef().set(draft()));
+    await assertSucceeds(enqueue('retry-finish', finalJob()));
+    await assertFails(draftRef().set(draft()));
+  });
+  it('freezes a successful finalization draft and keeps unfinalized identities from generating', async () => {
+    await completed(); await seed({ 'garments/coat-1': { active: true } });
+    await assertFails(enqueue('premature-generation', generate({ requestVersion: 4 })));
+    await enqueue('finish', finalJob());
+    await seed({ 'jobs/finish': finalJob({ status: 'completed' }) });
+    await assertFails(draftRef().set(draft()));
+  });
+});
+
 function upload(path = photoPath, uid = ALICE, contentType = 'image/jpeg', data = new Uint8Array([1, 2, 3])) {
   return Promise.resolve(env.authenticatedContext(uid).storage().ref(path).put(data, { contentType }));
 }

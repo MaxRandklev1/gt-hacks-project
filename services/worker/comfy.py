@@ -92,10 +92,14 @@ class ComfyClient:
     def profile(self, profile_id):
         return self.json("GET", f"/universal-identity/profiles/{safe_id(profile_id)}")["profile"]
 
-    def train(self, profile_id):
-        return self.json("POST", f"/universal-identity/profiles/{safe_id(profile_id)}/train", json={"steps": 400})["job"]
+    def train(self, profile_id, *, steps=400):
+        if type(steps) is not int or not 1 <= steps <= 2000:
+            raise ValueError("Invalid training step count.")
+        return self.json("POST", f"/universal-identity/profiles/{safe_id(profile_id)}/train", json={"steps": steps})["job"]
 
-    def wait_training(self, training_id, guard, progress, *, timeout=3600, interval=3):
+    def wait_training(self, training_id, guard, progress, *, steps=400, timeout=3600, interval=3):
+        if type(steps) is not int or not 1 <= steps <= 2000:
+            raise ValueError("Invalid training step count.")
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             guard()
@@ -104,7 +108,7 @@ class ComfyClient:
                 raise ComfyError("Local identity training failed. Check the local training log.")
             if job["status"] == "completed":
                 return job
-            progress(min(0.95, max(0, job.get("current_step", 0)) / 400))
+            progress(min(0.95, max(0, job.get("current_step", 0)) / steps))
             time.sleep(interval)
         raise ComfyError("Local training exceeded its time limit; inspect ComfyUI before retrying.")
 
@@ -222,6 +226,10 @@ class LocalProfiles:
         if not isinstance(trigger, str) or not re.fullmatch(r"[A-Za-z0-9_]{1,100}", trigger):
             raise ValueError("Invalid identity trigger in saved manifest.")
         selfie = manifest.get("schemaVersion") == 2
+        pending = manifest.get("schemaVersion") == 3 and manifest.get("referencePending") is True
+        steps = manifest.get("steps")
+        if type(steps) is not int or not 1 <= steps <= 2000:
+            raise ValueError("Invalid training steps in saved manifest.")
         if selfie and (manifest.get("referenceSource") not in ("live_selfie", "recent_selfie") or reference_bytes is None
                        or hashlib.sha256(reference_bytes).hexdigest() != manifest.get("referenceSha256")):
             raise ValueError("Restoring this identity requires its verified selfie reference.")
@@ -231,11 +239,14 @@ class LocalProfiles:
         profile["trigger"] = trigger
         for photo in profile["photos"]:
             photo["caption"] = f"photo of {trigger}, a person"
-            if selfie:
+            if selfie or pending:
                 photo["selected"] = False  # The restore reference is not a training dataset.
         profile["cloud_identity"] = {"uid": uid, "version": manifest["version"]}
-        profile["latest_successful"] = {"adapter_relative": "cloud-import/adapter.safetensors", "steps": 400}
+        profile["latest_successful"] = {"adapter_relative": "cloud-import/adapter.safetensors", "steps": steps}
         profile["training"] = {"status": "completed", "job_id": None}
+        if pending:
+            profile["inference_reference_required"] = True
+            profile.pop("inference_reference", None)
         self.save(directory, profile)
         if selfie:
             self.bind_reference(profile_id, uid, manifest["version"], reference_bytes, source=manifest["referenceSource"])

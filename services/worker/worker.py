@@ -36,6 +36,7 @@ LEASE_SECONDS = 120
 HEARTBEAT_SECONDS = 20
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_ADAPTER_BYTES = 256 * 1024 * 1024
+SPLIT_TRAINING_STEPS = 80
 
 
 class JobError(ValueError):
@@ -54,19 +55,33 @@ def sha256(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def identity_paths(uid, version):
+def upload_uuid(value):
+    try:
+        if not isinstance(value, str) or str(uuid.UUID(value)) != value:
+            raise ValueError
+    except (ValueError, AttributeError):
+        raise JobError("Upload a new set of photos before continuing.") from None
+    return value
+
+
+def identity_paths(uid, version, reference_version=None):
     safe_id(uid)
     safe_id(version)
     prefix = f"users/{uid}/identity/{version}"
-    return {"adapterPath": prefix + "/adapter.safetensors", "referencePath": prefix + "/reference.png",
-            "manifestPath": prefix + "/manifest.json"}
+    reference_prefix = prefix if reference_version is None else prefix + "/references/" + upload_uuid(reference_version)
+    return {"adapterPath": prefix + "/adapter.safetensors", "referencePath": reference_prefix + "/reference.png",
+            "manifestPath": reference_prefix + "/manifest.json"}
+
+
+def pending_manifest_path(uid, version):
+    return f"users/{safe_id(uid)}/identity/{safe_id(version)}/training.json"
 
 
 def previous_ready_identity(uid, value):
     if not isinstance(value, dict) or value.get("status") != "ready":
         return None
     try:
-        expected = identity_paths(uid, value.get("version"))
+        expected = identity_paths(uid, value.get("version"), value.get("referenceVersion"))
     except ValueError:
         return None
     return dict(value) if all(value.get(key) == path for key, path in expected.items()) else None
@@ -82,20 +97,19 @@ def failed_identity(uid, version, message, previous=None):
 def validate_job(job_id, job):
     safe_id(job_id)
     uid = safe_id(job.get("uid"))
-    if type(job.get("requestVersion")) is not int or job["requestVersion"] not in {1, 2, 3} or job.get("kind") not in {"train", "generate"}:
+    if type(job.get("requestVersion")) is not int or job["requestVersion"] not in {1, 2, 3, 4} or job.get("kind") not in {"train", "generate", "finalize"}:
         raise JobError("Unsupported job request. Reload the app and submit again.")
     if job["kind"] == "train":
-        if job["requestVersion"] not in {2, 3}:
+        if job["requestVersion"] not in {2, 3, 4}:
             raise JobError("Reload onboarding and take or choose a clear recent selfie before training.")
-        upload_id = job.get("uploadId")
-        try:
-            if not isinstance(upload_id, str) or str(uuid.UUID(upload_id)) != upload_id:
-                raise ValueError
-        except (ValueError, AttributeError):
-            raise JobError("Upload a new set of eight photos before training.") from None
+        upload_id = upload_uuid(job.get("uploadId"))
         expected = [f"users/{uid}/uploads/{upload_id}/{index}.jpg" for index in range(8)]
         if job.get("photoPaths") != expected:
             raise JobError("Training needs exactly eight photos from this account's upload.")
+        if job["requestVersion"] == 4:
+            if any(key in job for key in ("selfiePath", "selfieSource", "selfieSelectedAt", "selfieCapturedAt", "heightCm", "weightKg", "steps")):
+                raise JobError("Reload the app to start photo-only training.")
+            return uid
         if job.get("selfiePath") != f"users/{uid}/uploads/{upload_id}/selfie.jpg":
             raise JobError("Take or choose a clear recent selfie for this account's current upload before training.")
         capture, created = job.get("selfieCapturedAt"), job.get("createdAt")
@@ -114,9 +128,40 @@ def validate_job(job_id, job):
                 raise JobError("The selfie capture timestamp is missing or invalid. Take or choose a clear recent selfie and submit again.")
             if source == "upload" and "selfieCapturedAt" in job:
                 raise JobError("A chosen selfie must record its selection time, without claiming a camera capture time.")
+    elif job["kind"] == "finalize":
+        if job["requestVersion"] != 4:
+            raise JobError("Unsupported reference finalization request.")
+        safe_id(job.get("trainingJobId"))
     else:
         safe_id(job.get("garmentId"))
     return uid
+
+
+def validate_finalize_context(uid, training_id, user, training, draft):
+    identity = user.get("identity") or {}
+    if (user.get("trainingJobId") != training_id or identity.get("version") != training_id
+            or identity.get("status") != "awaiting_reference"):
+        raise JobError("This trained profile is no longer waiting for a reference. Reload onboarding.")
+    if (not training or training.get("uid") != uid or training.get("kind") != "train"
+            or training.get("requestVersion") != 4 or training.get("status") != "completed"):
+        raise JobError("Finish training your uploaded photos before saving the reference.")
+    if user.get("consentVersion") != "identity-training-v1" or not user.get("consentAt"):
+        raise JobError("Accept the identity-training consent before continuing.")
+    if (type(user.get("heightCm")) not in (int, float) or not 80 <= user["heightCm"] <= 250
+            or type(user.get("weightKg")) not in (int, float) or not 25 <= user["weightKg"] <= 300
+            or user.get("measurementSystem") not in ("us", "metric")):
+        raise JobError("Save your height and weight before finishing onboarding.")
+    if not isinstance(draft, dict) or draft.get("trainingJobId") != training_id:
+        raise JobError("Take or choose a clear recent selfie before finishing onboarding.")
+    upload_uuid(draft.get("uploadId"))
+    # Reuse the reviewed v3 source/capture validation, relative to draft submission,
+    # so waiting in the queue never makes an originally valid choice expire.
+    reference_job = {"uid": uid, "kind": "train", "requestVersion": 3,
+                     "uploadId": draft["uploadId"], "createdAt": draft.get("submittedAt"),
+                     "photoPaths": [f"users/{uid}/uploads/{draft['uploadId']}/{i}.jpg" for i in range(8)]}
+    reference_job.update({key: draft[key] for key in ("selfiePath", "selfieSource", "selfieSelectedAt", "selfieCapturedAt") if key in draft})
+    validate_job(training_id, reference_job)
+    return identity
 
 
 def validate_garment(garment_id, garment):
@@ -175,6 +220,12 @@ class FirebaseStore:
     def user(self, uid):
         return self.db.collection("users").document(safe_id(uid)).get().to_dict() or {}
 
+    def onboarding(self, uid):
+        return self.db.collection("users").document(safe_id(uid)).collection("onboarding").document("current").get().to_dict()
+
+    def job(self, job_id):
+        return self.db.collection("jobs").document(safe_id(job_id)).get().to_dict()
+
     def garment(self, garment_id):
         return self.db.collection("garments").document(safe_id(garment_id)).get().to_dict()
 
@@ -204,7 +255,7 @@ class FirebaseStore:
                 return claimed
         return None
 
-    def update(self, job_id, owner, token, fields=None, *, user_fields=None, generation=None):
+    def update(self, job_id, owner, token, fields=None, *, user_fields=None, generation=None, finalization=None):
         reference = self.db.collection("jobs").document(safe_id(job_id))
         def write(transaction):
             job = reference.get(transaction=transaction).to_dict()
@@ -213,10 +264,19 @@ class FirebaseStore:
                     or job.get("leaseToken") != token or job.get("leaseExpiresAt", stamp) <= stamp):
                 raise LostLease("Job ownership expired; no further work will be submitted.")
             uid = safe_id(job["uid"])
+            user_ref = self.db.collection("users").document(uid)
+            if finalization is not None:
+                training_id = safe_id(finalization["trainingJobId"])
+                user = user_ref.get(transaction=transaction).to_dict() or {}
+                training = self.db.collection("jobs").document(training_id).get(transaction=transaction).to_dict()
+                draft = user_ref.collection("onboarding").document("current").get(transaction=transaction).to_dict()
+                validate_finalize_context(uid, training_id, user, training, draft)
+                if draft != finalization["draft"]:
+                    raise JobError("Your reference changed while being saved. Submit the current selfie again.")
             updates = {"updatedAt": stamp, "leaseExpiresAt": stamp + timedelta(seconds=LEASE_SECONDS)} | (fields or {})
             transaction.update(reference, updates)
             if user_fields is not None:
-                transaction.update(self.db.collection("users").document(uid), {"updatedAt": stamp} | user_fields)
+                transaction.update(user_ref, {"updatedAt": stamp} | user_fields)
             if generation is not None:
                 destination = self.db.collection("users").document(uid).collection("generations").document(job_id)
                 transaction.set(destination, {"uid": uid, "jobId": job_id, "updatedAt": stamp} | generation, merge=True)
@@ -333,6 +393,8 @@ class Worker:
                 with tempfile.TemporaryDirectory(prefix="job-", dir=self.state_dir) as folder:
                     if job["kind"] == "train":
                         self.train(job_id, job, uid, Path(folder), lease, previous_identity)
+                    elif job["kind"] == "finalize":
+                        self.finalize(job_id, job, uid, user, Path(folder), lease)
                     else:
                         self.generate(job_id, job, uid, user, Path(folder), lease)
             except LostLease:
@@ -351,12 +413,7 @@ class Worker:
                 except Exception:
                     logging.exception("Could not publish terminal status; lease expiry will fail the job.")
 
-    def train(self, job_id, job, uid, folder, lease, previous_identity=None):
-        identity = {"status": "selecting", "version": job_id, "error": None, "updatedAt": now()}
-        lease.write({"stage": "selecting", "message": "Choosing five clear, varied photos from your eight uploads.",
-                     "progress": 0.05, "previousIdentity": previous_identity},
-                    user_fields={"identity": identity, "trainingJobId": job_id})
-        lease.guard()
+    def reference(self, job, folder):
         selfie = clean_image(self.store.download(job["selfiePath"], MAX_IMAGE_BYTES), folder / "selfie-reference.png")
         try:
             self.selfie_validator(selfie)
@@ -365,6 +422,23 @@ class Worker:
         reference_data = selfie.read_bytes()
         if len(reference_data) > MAX_IMAGE_BYTES:
             raise JobError("The normalized selfie exceeds 20 MiB. Take or choose a smaller clear recent selfie.")
+        source = "recent_selfie" if job.get("selfieSource") == "upload" else "live_selfie"
+        provenance = {"referenceSource": source, "referenceSourcePath": job["selfiePath"],
+                      "selfieSelectedAt": job.get("selfieSelectedAt", job.get("selfieCapturedAt"))}
+        if source == "live_selfie":
+            provenance["selfieCapturedAt"] = job["selfieCapturedAt"]
+        return reference_data, provenance
+
+    def train(self, job_id, job, uid, folder, lease, previous_identity=None):
+        split = job.get("requestVersion") == 4
+        steps = SPLIT_TRAINING_STEPS if split else 400
+        identity = {"status": "selecting", "version": job_id, "error": None, "updatedAt": now()}
+        lease.write({"stage": "selecting", "message": "Choosing five clear, varied photos from your eight uploads.",
+                     "progress": 0.05, "previousIdentity": previous_identity},
+                    user_fields={"identity": identity, "trainingJobId": job_id})
+        lease.guard()
+        if not split:
+            reference_data, provenance = self.reference(job, folder)
         paths = []
         for index, storage_path in enumerate(job["photoPaths"]):
             lease.guard()
@@ -389,33 +463,43 @@ class Worker:
         profile = self.comfy.create_profile("cloud-" + sha256(uid.encode())[:12] + "-" + job_id[:20], clean)
         profile_id = safe_id(profile["id"])
         self.profiles.mark_owner(profile_id, uid, job_id, require_selfie=True)
-        reference_source = "recent_selfie" if job.get("selfieSource") == "upload" else "live_selfie"
-        selected_at = job.get("selfieSelectedAt", job.get("selfieCapturedAt"))
-        provenance = {"referenceSource": reference_source, "referenceSourcePath": job["selfiePath"],
-                      "selfieSelectedAt": selected_at}
-        if reference_source == "live_selfie":
-            provenance["selfieCapturedAt"] = job["selfieCapturedAt"]
-        self.profiles.bind_reference(profile_id, uid, job_id, reference_data, source=reference_source)
+        if not split:
+            self.profiles.bind_reference(profile_id, uid, job_id, reference_data, source=provenance["referenceSource"])
         identity |= {"status": "training", "profileId": profile_id, "selectedPhotos": selection, "updatedAt": now()}
-        lease.write({"stage": "training", "message": "Training your identity for 400 steps.", "progress": 0.15,
-                     "localProfileId": profile_id}, user_fields={"identity": identity})
+        lease.write({"stage": "training", "message": f"Training your identity for {steps} steps.", "progress": 0.15,
+                     "localProfileId": profile_id, "trainingSteps": steps}, user_fields={"identity": identity})
         lease.guard()
-        training = self.comfy.train(profile_id)
+        training = self.comfy.train(profile_id, steps=steps) if split else self.comfy.train(profile_id)
         lease.write({"localTrainingJobId": training["job_id"]})
         last = [-1.0]
         def progress(fraction):
             value = 0.15 + 0.75 * fraction
             if value - last[0] >= 0.02:
-                lease.write({"progress": value, "message": f"Training identity: {int(fraction * 400)}/400 steps."})
+                lease.write({"progress": value, "message": f"Training identity: {int(fraction * steps)}/{steps} steps."})
                 last[0] = value
-        self.comfy.wait_training(training["job_id"], lease.guard, progress)
+        self.comfy.wait_training(training["job_id"], lease.guard, progress, steps=steps)
         adapter, local = self.profiles.adapter(profile_id, uid, job_id)
         if adapter.stat().st_size > MAX_ADAPTER_BYTES:
             raise JobError("The trained adapter exceeds the supported size.")
         adapter_data = adapter.read_bytes()
         destinations = identity_paths(uid, job_id)
+        if split:
+            manifest_path = pending_manifest_path(uid, job_id)
+            manifest = {"schemaVersion": 3, "referencePending": True, "uid": uid, "version": job_id,
+                        "profileId": profile_id, "trigger": local["trigger"], "steps": steps,
+                        "selectedPhotos": selection, "adapterPath": destinations["adapterPath"],
+                        "adapterSha256": sha256(adapter_data)}
+            lease.write({"stage": "saving", "message": "Saving your trained identity.", "progress": 0.95})
+            self.store.upload(destinations["adapterPath"], adapter_data, "application/octet-stream")
+            lease.guard()
+            self.store.upload(manifest_path, json.dumps(manifest).encode(), "application/json")
+            identity |= {"status": "awaiting_reference", "steps": steps, "adapterPath": destinations["adapterPath"],
+                         "trainingManifestPath": manifest_path, "updatedAt": now()}
+            lease.write({"status": "completed", "stage": "awaiting_reference", "message": "Training is finished. Complete your measurements and recent selfie.", "progress": 1.0},
+                        user_fields={"identity": identity, "trainingJobId": job_id})
+            return
         manifest = {"schemaVersion": 2, "uid": uid, "version": job_id, "profileId": profile_id,
-                    "trigger": local["trigger"], "steps": 400, "selectedPhotos": selection,
+                    "trigger": local["trigger"], "steps": steps, "selectedPhotos": selection,
                     **{key: value.isoformat() if isinstance(value, datetime) else value for key, value in provenance.items()},
                     **destinations, "adapterSha256": sha256(adapter_data), "referenceSha256": sha256(reference_data)}
         lease.write({"stage": "saving", "message": "Saving your private identity adapter.", "progress": 0.95})
@@ -428,17 +512,77 @@ class Worker:
         lease.write({"status": "completed", "stage": "ready", "message": "Your identity is ready.", "progress": 1.0},
                     user_fields={"identity": identity})
 
+    def finalize(self, job_id, job, uid, user, folder, lease):
+        training_id = safe_id(job.get("trainingJobId"))
+        draft, training = self.store.onboarding(uid), self.store.job(training_id)
+        identity = validate_finalize_context(uid, training_id, user, training, draft)
+        fence = {"trainingJobId": training_id, "draft": draft}
+        lease.write({"stage": "validating_reference", "message": "Checking your recent selfie.", "progress": 0.1}, finalization=fence)
+        manifest_path = pending_manifest_path(uid, training_id)
+        adapter_path = identity_paths(uid, training_id)["adapterPath"]
+        if identity.get("trainingManifestPath") != manifest_path or identity.get("adapterPath") != adapter_path:
+            raise JobError("The trained identity does not match this account.")
+        pending = json.loads(self.store.download(manifest_path, 1024 * 1024))
+        if (pending.get("schemaVersion") != 3 or pending.get("referencePending") is not True
+                or pending.get("uid") != uid or pending.get("version") != training_id
+                or type(pending.get("steps")) is not int or not 1 <= pending["steps"] <= 2000
+                or pending["steps"] != identity.get("steps")
+                or pending.get("adapterPath") != adapter_path
+                or not isinstance(pending.get("trigger"), str) or not re.fullmatch(r"[A-Za-z0-9_]{1,100}", pending["trigger"])
+                or not isinstance(pending.get("adapterSha256"), str) or not re.fullmatch(r"[0-9a-f]{64}", pending["adapterSha256"])):
+            raise JobError("The saved trained identity failed ownership validation.")
+        reference_data, provenance = self.reference(draft, folder)
+        profile_id = identity.get("profileId")
+        try:
+            adapter, local = self.profiles.adapter(profile_id, uid, training_id)
+            if sha256(adapter.read_bytes()) != pending["adapterSha256"] or local.get("trigger") != pending["trigger"]:
+                raise ValueError("Cached training does not match its cloud manifest.")
+            if not self.comfy.profile(profile_id).get("training", {}).get("adapter_available"):
+                raise ValueError("Cached adapter is unavailable.")
+        except (ValueError, OSError, ComfyError, KeyError):
+            lease.write({"stage": "restoring_identity", "message": "Restoring your trained identity.", "progress": 0.4}, finalization=fence)
+            adapter_data = self.store.download(adapter_path, MAX_ADAPTER_BYTES)
+            if sha256(adapter_data) != pending["adapterSha256"]:
+                raise JobError("The saved trained adapter failed integrity validation.")
+            reference = folder / "selfie-reference.png"
+            lease.guard()
+            profile = self.comfy.create_profile("cloud-" + sha256(uid.encode())[:12] + "-" + training_id[:20], [reference])
+            profile_id = safe_id(profile["id"])
+            self.profiles.restore(profile_id, uid, pending, adapter_data)
+        lease.guard()
+        self.profiles.bind_reference(profile_id, uid, training_id, reference_data, source=provenance["referenceSource"])
+        if self.comfy.profile(profile_id).get("reference_source") != provenance["referenceSource"]:
+            raise JobError("The local identity extension needs its selfie-reference update before continuing.")
+        reference_version = draft["uploadId"]
+        destinations = identity_paths(uid, training_id, reference_version)
+        manifest = {key: value for key, value in pending.items() if key not in ("schemaVersion", "referencePending")}
+        manifest |= {"schemaVersion": 2, "referenceVersion": reference_version, **destinations,
+                     **{key: value.isoformat() if isinstance(value, datetime) else value for key, value in provenance.items()},
+                     "referenceSha256": sha256(reference_data)}
+        lease.write({"stage": "saving_reference", "message": "Saving your current look.", "progress": 0.8}, finalization=fence)
+        self.store.upload(destinations["referencePath"], reference_data, "image/png")
+        lease.guard()
+        self.store.upload(destinations["manifestPath"], json.dumps(manifest).encode(), "application/json")
+        ready = identity | {"status": "ready", "profileId": profile_id, "steps": pending["steps"],
+                            "referenceVersion": reference_version, **destinations, **provenance,
+                            "error": None, "updatedAt": now()}
+        lease.write({"status": "completed", "stage": "ready", "message": "Your identity is ready.", "progress": 1.0},
+                    user_fields={"identity": ready}, finalization=fence)
+
     def identity_profile(self, uid, identity, folder, lease):
         if not isinstance(identity, dict) or identity.get("status") != "ready":
             raise JobError("Train your identity before generating a try-on.")
         version = safe_id(identity.get("version"))
-        expected = identity_paths(uid, version)
+        reference_version = identity.get("referenceVersion")
+        expected = identity_paths(uid, version, reference_version)
         if any(identity.get(key) != path for key, path in expected.items()):
             raise JobError("The saved identity does not match this account. Train it again.")
         manifest = json.loads(self.store.download(expected["manifestPath"], 1024 * 1024))
         if (type(manifest.get("schemaVersion")) is not int or manifest["schemaVersion"] not in {1, 2}
                 or manifest.get("uid") != uid or manifest.get("version") != version
-                or manifest.get("steps") != 400 or any(manifest.get(key) != path for key, path in expected.items())):
+                or type(manifest.get("steps")) is not int or not 1 <= manifest["steps"] <= 2000
+                or manifest.get("referenceVersion") != reference_version
+                or any(manifest.get(key) != path for key, path in expected.items())):
             raise JobError("The saved identity manifest failed ownership validation.")
         selfie = manifest["schemaVersion"] == 2
         if selfie:
@@ -446,6 +590,8 @@ class Worker:
             match = re.fullmatch(re.escape(f"users/{uid}/uploads/") + r"([0-9a-f-]{36})/selfie\.jpg", source or "")
             try:
                 valid_source = bool(match and str(uuid.UUID(match[1])) == match[1])
+                if reference_version is not None:
+                    valid_source = valid_source and match[1] == reference_version
                 reference_source = manifest.get("referenceSource")
                 selected = manifest.get("selfieSelectedAt")
                 if reference_source == "live_selfie":

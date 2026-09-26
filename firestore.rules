@@ -6,6 +6,19 @@ service cloud.firestore {
       return data.heightCm is number && data.heightCm >= 80 && data.heightCm <= 250
         && data.weightKg is number && data.weightKg >= 25 && data.weightKg <= 300;
     }
+    function validUploadId(value) {
+      return value is string && value.matches('^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$');
+    }
+    function freshReferenceTime(value) {
+      return value is timestamp && value >= request.time - duration.value(1, 'h')
+        && value <= request.time + duration.value(2, 'm');
+    }
+    function validReference(data) {
+      return data.selfieSource in ['camera','upload'] && freshReferenceTime(data.selfieSelectedAt)
+        && ((data.selfieSource == 'camera' && freshReferenceTime(data.selfieCapturedAt)
+            && data.selfieCapturedAt <= data.selfieSelectedAt)
+          || (data.selfieSource == 'upload' && !('selfieCapturedAt' in data)));
+    }
     function userFields() { return ['displayName','email','photoURL','heightCm','weightKg','measurementSystem','consentVersion','consentAt','createdAt','updatedAt']; }
     function validUser(data) {
       return data.displayName is string && data.displayName.size() <= 200
@@ -23,6 +36,26 @@ service cloud.firestore {
       allow update: if owner(uid) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(userFields())
         && request.resource.data.createdAt == resource.data.createdAt && validUser(request.resource.data);
       match /generations/{id} { allow read: if owner(uid); }
+      match /onboarding/{draftId} {
+        allow read: if owner(uid) && draftId == 'current';
+        function validDraft(data) {
+          let parent = get(/databases/$(database)/documents/jobs/$(data.trainingJobId)).data;
+          let lock = getAfter(/databases/$(database)/documents/users/$(uid)/queue/current).data;
+          let current = getAfter(/databases/$(database)/documents/jobs/$(lock.jobId)).data;
+          return draftId == 'current'
+            && data.keys().hasOnly(['trainingJobId','uploadId','selfiePath','selfieSource','selfieSelectedAt','selfieCapturedAt','submittedAt'])
+            && data.trainingJobId is string && data.trainingJobId.matches('^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$')
+            && parent.uid == uid && parent.kind == 'train' && parent.requestVersion == 4
+            && parent.status in ['queued','running','completed']
+            && current.uid == uid
+            && (lock.jobId == data.trainingJobId || (current.kind == 'finalize'
+                && current.trainingJobId == data.trainingJobId && current.status == 'failed'))
+            && validUploadId(data.uploadId)
+            && data.selfiePath == 'users/' + uid + '/uploads/' + data.uploadId + '/selfie.jpg'
+            && data.submittedAt == request.time && validReference(data);
+        }
+        allow create, update: if owner(uid) && validDraft(request.resource.data);
+      }
       match /queue/{queueId} {
         allow read: if owner(uid);
         function newJob() { return getAfter(/databases/$(database)/documents/jobs/$(request.resource.data.jobId)).data; }
@@ -41,31 +74,35 @@ service cloud.firestore {
       allow read: if owner(resource.data.uid);
       function profile() { return getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data; }
       function photoPath(slot) { return 'users/' + request.auth.uid + '/uploads/' + request.resource.data.uploadId + '/' + slot + '.jpg'; }
-      function freshReferenceTime(value) {
-        return value is timestamp
-          && value >= request.time - duration.value(1, 'h')
-          && value <= request.time + duration.value(2, 'm');
-      }
       function cameraReferenceV2(data) {
         return data.keys().hasOnly(['uid','kind','status','requestVersion','createdAt','uploadId','photoPaths','selfiePath','selfieCapturedAt'])
           && freshReferenceTime(data.selfieCapturedAt);
       }
       function selectedReferenceV3(data) {
         return data.keys().hasOnly(['uid','kind','status','requestVersion','createdAt','uploadId','photoPaths','selfiePath','selfieSource','selfieSelectedAt','selfieCapturedAt'])
-          && data.selfieSource in ['camera','upload']
-          && freshReferenceTime(data.selfieSelectedAt)
-          && ((data.selfieSource == 'camera' && freshReferenceTime(data.selfieCapturedAt)
-              && data.selfieCapturedAt <= data.selfieSelectedAt)
-            || (data.selfieSource == 'upload' && !('selfieCapturedAt' in data)));
+          && validReference(data);
       }
       function trainRequest(data) {
         return ((data.requestVersion == 2 && cameraReferenceV2(data))
-            || (data.requestVersion == 3 && selectedReferenceV3(data)))
-          && data.uploadId is string && data.uploadId.matches('^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+            || (data.requestVersion == 3 && selectedReferenceV3(data))
+            || (data.requestVersion == 4 && data.keys().hasOnly(['uid','kind','status','requestVersion','createdAt','uploadId','photoPaths'])))
+          && validUploadId(data.uploadId)
           && data.photoPaths is list && data.photoPaths.size() == 8
           && data.photoPaths == [photoPath('0'),photoPath('1'),photoPath('2'),photoPath('3'),photoPath('4'),photoPath('5'),photoPath('6'),photoPath('7')]
-          && data.selfiePath == photoPath('selfie')
-          && validMeasurements(profile()) && profile().consentVersion == 'identity-training-v1';
+          && (data.requestVersion == 4 || (data.selfiePath == photoPath('selfie') && validMeasurements(profile())))
+          && profile().consentVersion == 'identity-training-v1' && profile().consentAt is timestamp;
+      }
+      function finalizeRequest(data) {
+        let parent = get(/databases/$(database)/documents/jobs/$(data.trainingJobId)).data;
+        let draft = get(/databases/$(database)/documents/users/$(request.auth.uid)/onboarding/current).data;
+        return data.requestVersion == 4
+          && data.keys().hasOnly(['uid','kind','status','requestVersion','createdAt','trainingJobId'])
+          && data.trainingJobId is string && data.trainingJobId.matches('^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$')
+          && parent.uid == request.auth.uid && parent.kind == 'train' && parent.requestVersion == 4 && parent.status == 'completed'
+          && profile().trainingJobId == data.trainingJobId && profile().identity.version == data.trainingJobId
+          && profile().identity.status == 'awaiting_reference' && draft.trainingJobId == data.trainingJobId
+          && validMeasurements(profile()) && profile().measurementSystem in ['us','metric']
+          && profile().consentVersion == 'identity-training-v1';
       }
       function generationRequest(data) {
         return data.keys().hasOnly(['uid','kind','status','requestVersion','createdAt','garmentId'])
@@ -74,12 +111,13 @@ service cloud.firestore {
           && profile().identity.status == 'ready';
       }
       allow create: if request.auth != null && owner(request.resource.data.uid)
-        && request.resource.data.requestVersion is int && request.resource.data.requestVersion in [2,3]
+        && request.resource.data.requestVersion is int && request.resource.data.requestVersion in [2,3,4]
         && request.resource.data.status == 'queued'
         && request.resource.data.createdAt == request.time
         && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)/queue/current).data.jobId == jobId
         && ((request.resource.data.kind == 'train' && trainRequest(request.resource.data))
-          || (request.resource.data.kind == 'generate' && generationRequest(request.resource.data)));
+          || (request.resource.data.kind == 'generate' && generationRequest(request.resource.data))
+          || (request.resource.data.kind == 'finalize' && finalizeRequest(request.resource.data)));
     }
   }
 }
