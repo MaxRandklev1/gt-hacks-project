@@ -1,4 +1,4 @@
-"""Render two local trained profiles with otherwise identical try-on settings.
+"""Render local identity profiles with otherwise identical try-on settings.
 
 Outputs, graphs, and private profile metadata stay in ignored training-comparisons/.
 This compares complete profiles, not necessarily training-step counts alone.
@@ -29,22 +29,27 @@ def save_json(path, value):
 
 def board(items, output):
     width, height, heading = 768, 768, 60
-    canvas = Image.new("RGB", (width * len(items), height + heading), "#f5f3ee")
+    columns = 2 if len(items) == 4 else min(3, len(items))
+    rows = (len(items) + columns - 1) // columns
+    canvas = Image.new("RGB", (width * columns, (height + heading) * rows), "#f5f3ee")
     draw = ImageDraw.Draw(canvas)
     font_path = Path("C:/Windows/Fonts/segoeui.ttf")
     font = ImageFont.truetype(str(font_path), 24) if font_path.exists() else ImageFont.load_default()
     for index, (label, path) in enumerate(items):
+        x, y = (index % columns) * width, (index // columns) * (height + heading)
         with Image.open(path) as source:
             image = ImageOps.contain(source.convert("RGB"), (width, height), Image.Resampling.LANCZOS)
-        canvas.paste(image, (index * width + (width - image.width) // 2, heading + (height - image.height) // 2))
-        draw.text((index * width + 22, 18), label, fill="#20231e", font=font)
+        canvas.paste(image, (x + (width - image.width) // 2, y + heading + (height - image.height) // 2))
+        draw.text((x + 22, y + 18), label, fill="#20231e", font=font)
     canvas.save(output)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--profiles", nargs=2, required=True)
-    parser.add_argument("--labels", nargs=2, default=["Before", "After"])
+    parser.add_argument("--profiles", nargs="+", required=True)
+    parser.add_argument("--labels", nargs="+", help="One display label per profile.")
+    parser.add_argument("--no-personal-lora", nargs="*", type=int, default=[], help="Zero-based cases to render without a personal LoRA; BFS and the image reference remain enabled.")
+    parser.add_argument("--pin-identity-instruction", action="store_true", help="Use the trained identity instruction even in no-LoRA cases, isolating the weight change from prompt wording.")
     parser.add_argument("--name", required=True, help="Unique output folder name; existing runs are never resubmitted.")
     parser.add_argument("--collect-only", action="store_true", help="Resume collection without submitting GPU work.")
     parser.add_argument("--face-box", nargs=4, type=int, metavar=("LEFT", "TOP", "RIGHT", "BOTTOM"), help="Optional matching crop, measured in the original final image's pixels.")
@@ -52,6 +57,9 @@ def main():
     args = parser.parse_args()
     name = safe_id(args.name)
     profiles = [safe_id(value) for value in args.profiles]
+    labels = args.labels or (["Before", "After"] if len(profiles) == 2 else profiles)
+    if len(labels) != len(profiles) or any(index < 0 or index >= len(profiles) for index in args.no_personal_lora):
+        parser.error("Provide one label per profile and valid zero-based no-LoRA case indices.")
     destination = ROOT / "training-comparisons" / name
     manifest_path = destination / "manifest.json"
     client = ComfyClient()
@@ -65,28 +73,34 @@ def main():
         if not client.idle():
             raise RuntimeError("ComfyUI is busy. Wait before submitting comparisons.")
         public_profiles = [client.profile(profile) for profile in profiles]
-        if any(not profile.get("training", {}).get("adapter_available") for profile in public_profiles):
-            raise ValueError("Both profiles need a successfully trained adapter.")
+        if any(not profile.get("training", {}).get("adapter_available") for index, profile in enumerate(public_profiles) if index not in args.no_personal_lora):
+            raise ValueError("Every trained case needs a successfully trained adapter.")
         template = json.loads((ROOT / "Qwen21_Universal_TryOn_4K.api.json").read_text(encoding="utf-8-sig"))
         destination.mkdir(parents=True)
-        manifest = {"profiles": profiles, "labels": args.labels, "profileSnapshots": public_profiles, "cases": [],
+        manifest = {"profiles": profiles, "labels": labels, "profileSnapshots": public_profiles, "cases": [],
+                    "noPersonalLora": args.no_personal_lora, "pinnedIdentityInstruction": args.pin_identity_instruction,
                     "template": "Qwen21_Universal_TryOn_4K.api.json",
                     "templateSha256": hashlib.sha256(json.dumps(template, sort_keys=True).encode()).hexdigest(),
                     "limitation": "A complete-profile comparison; training captions and identity trigger may differ."}
         save_json(manifest_path, manifest)
-        for index, (profile, label) in enumerate(zip(profiles, args.labels)):
+        for index, (profile, label) in enumerate(zip(profiles, labels)):
             graph = copy.deepcopy(template)
             graph["14"]["inputs"]["profile_id"] = profile
+            graph["14"]["inputs"]["use_trained_identity"] = index not in args.no_personal_lora
+            if args.pin_identity_instruction:
+                trigger = public_profiles[index]["trigger"]
+                graph["15"]["inputs"]["identity_instruction"] = f"The person in reference image 2 is {trigger}. Use that person's identity and distinctive facial features."
             for node_id, node in graph.items():
                 if node["class_type"] == "SaveImage":
                     node["inputs"]["filename_prefix"] = f"IdentityComparison/{name}/case{index}_node{node_id}"
             save_json(destination / f"case{index}.api.json", graph)
             # Never retry a submission: a lost response may still mean GPU work was queued.
-            prompt_id = client.submit(graph, f"comparison-{name}-{index}")
+            client_id = "comparison-" + hashlib.sha256(f"{name}:{index}".encode()).hexdigest()[:24]
+            prompt_id = client.submit(graph, client_id)
             manifest["cases"].append({"profile": profile, "label": label, "promptId": prompt_id, "submittedAt": time.time()})
             save_json(manifest_path, manifest)
             print(json.dumps({"queued": label, "promptId": prompt_id}), flush=True)
-    if len(manifest["cases"]) != 2:
+    if len(manifest["cases"]) != len(profiles):
         raise RuntimeError("Submission was incomplete. Inspect ComfyUI before attempting any replacement work.")
     for index, case in enumerate(manifest["cases"]):
         if case.get("status") == "completed" and all(Path(case.get("outputs", {}).get(kind, "")).is_file() for kind in ("baseline", "final", "4k")):
