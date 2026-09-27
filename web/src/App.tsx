@@ -369,7 +369,8 @@ function App() {
 
       {screen === 'scanner' && <section className="piece-picker fade-in">
         <header className="piece-picker-heading"><div><p className="eyebrow">YOUR NEXT FIND</p><h1>Pick your next piece.<br />See it on you.</h1><p>Browse the collection or scan a garment’s tag. Either way, your next look starts here.</p></div><a className="button button-outline" href="#garment-scanner"><Icon name="scan" size={18} /> Have a QR code? Scan it</a></header>
-        <div className="piece-picker-layout"><GarmentCatalog key={user?.uid} onSelect={scan} disabled={Boolean(showGenerationProgress)} /><div id="garment-scanner" className="piece-picker-camera"><Scanner ref={scannerRef} onDetected={scan} onClose={() => navigate('home')} /></div></div>
+        <GarmentCatalog key={user?.uid} onSelect={scan} disabled={Boolean(showGenerationProgress)} />
+        <div id="garment-scanner" className="piece-picker-camera"><Scanner ref={scannerRef} onDetected={scan} onClose={() => navigate('home')} /></div>
       </section>}
 
       {screen === 'gallery' && <section className="gallery-page fade-in"><div className="gallery-heading"><div><p className="eyebrow">YOUR PERSONAL EDIT</p><h1>Your looks<span className="count-sup">{generations.length.toString().padStart(2, '0')}</span></h1><p>Every piece. Every possibility. All in one place.</p></div><button className="button button-ink" onClick={() => navigate('scanner')}><Icon name="scan" size={18} /> Choose a piece</button></div>{generations.length ? <div className="gallery-grid">{generations.map(lookCard)}</div> : <div className="empty-gallery"><div className="empty-look-frame"><Icon name="grid" size={34} /></div><h2>A little empty.<br />A lot of possibility.</h2><p>Choose your first piece to start building your personal collection of looks.</p><button className="button button-ink" onClick={() => navigate('scanner')}>Find your first look <Icon name="arrow" /></button></div>}</section>}
