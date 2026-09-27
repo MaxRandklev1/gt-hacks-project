@@ -102,6 +102,7 @@ The full workflow expects these files; none of the weights are committed:
 | `vae/` | `qwen_image_2.1_vae_bf16.safetensors` | [Comfy-Org distribution](https://huggingface.co/Comfy-Org/Qwen-Image-2.1/blob/main/vae/qwen_image_2.1_vae_bf16.safetensors) |
 | `vae/` | `texture_fix_vae_for_qwen_image_2.1_bf16.safetensors` | [Texture-fix VAE](https://huggingface.co/madebyollin/texture-fix-vae-for-qwen-image-2.1) |
 | `loras/` | `bfs_head_v1_qwen_2.1_gguf_split.safetensors` | Local conversion of [BFS Head V1](https://huggingface.co/Alissonerdx/BFS-Best-Face-Swap/blob/main/docs/qwen-image-2.1.md) |
+| `loras/` | `Qwen-Image-2.1-viggle-turbo-v0.2.1-6step-lora-r256.safetensors` | [Viggle turbo v0.2.1](https://huggingface.co/Viggle/Qwen-Image-2.1-viggle-turbo) (Qwen research licence). Garment presets only: 6 steps, ~30 s each. |
 | `loras/` | `elusarcas-qwen2-1-detailer-v1_gguf_split.safetensors` | Local conversion of [Detail Enhancer](https://huggingface.co/reverentelusarca/elusarcas-qwen-2.1-detail-enhancer-lora) |
 | `background_removal/` | `birefnet.safetensors` | [Comfy-Org BiRefNet](https://huggingface.co/Comfy-Org/BiRefNet) |
 | `upscale_models/` | `4xNomosUniDAT_otf.safetensors` | [4xNomosUniDAT](https://huggingface.co/Phips/4xNomosUniDAT_otf) |

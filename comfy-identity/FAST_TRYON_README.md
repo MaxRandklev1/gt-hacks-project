@@ -7,6 +7,15 @@ New onboarding selects one of five body templates from the person's saved height
 ## How it works
 
 1. **Once per garment and body template (catalog preparation):** `Qwen21_Garment_Styled_2K.api.json` dresses the selected base model in the garment. Output 1024 + 2K, cached under `.local/firebase-worker/styled/`. Its garment mask is computed once on the CPU.
+
+   **Preset speed (September 27, 2026).** The graph uses the [Viggle Qwen-Image-2.1 turbo LoRA](https://huggingface.co/Viggle/Qwen-Image-2.1-viggle-turbo) with its 6-step schedule instead of 80 steps. It caps the garment reference at 0.5 MP and drops the texture pass.
+   - **Time:** about **30 s per preset instead of 170–300 s**, measured on the demo tee, THREAD1 and THREAD2 on the middle body, THREAD2 and THREAD3 on the heaviest body, and THREAD1 on the slimmest.
+   - **Look:** side-by-side boards against the previous renders showed the same look, including the dragon print, polo stripes and logo, and the printed photo on the demo tee.
+   - **Alignment:** 0.93–0.99 against the worker's 0.85 bar.
+   - **Batch estimate:** 100 presets (10 garments × 10 bodies) take about 50 minutes instead of about 10 hours.
+   - **Caveat:** the turbo model's known weak spot is small dense text. Check any garment with fine lettering.
+   - **Licence:** Qwen research.
+   - Changing the graph changes the cache key, so existing presets re-render once.
 2. **Once per person (onboarding, GPU, ~50 s warm):**
    - The selfie is parsed and cropped to head and shoulders. With no usable face, the user is asked to retake it.
    - `Qwen21_Personal_Base_2K.api.json` (BFS head-swap LoRA, selfie as reference, person-neutral prompt, neutral closed-mouth expression, 24 steps, texture pass skipped) regenerates the whole head and exposed skin on the pose base.
