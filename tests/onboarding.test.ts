@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { onboardingProgress, replacementSetupScreen, savedMeasurementsValid, needsPersonalLookReview, readOnboardingChoices, saveOnboardingChoices } from '../web/src/lib/onboarding';
+import { onboardingProgress, replacementSetupScreen, savedMeasurementsValid, readOnboardingChoices, saveOnboardingChoices } from '../web/src/lib/onboarding';
 import type { Job, UserProfile } from '../web/src/lib/client';
 
 const measurements = { heightCm: 178, weightKg: 70, measurementSystem: 'us' as const, bodyStyle: 'male' as const };
@@ -62,23 +62,21 @@ describe('Selfie-only onboarding', () => {
   });
 });
 
-describe('Personal-look review and account-specific choices', () => {
+describe('Automatic personal-look completion and account-specific choices', () => {
   const personal: UserProfile = { identity: { status: 'ready', mode: 'personal_base', version: 'new-look', previewPath: 'users/person/identity/new-look/preview.png' } };
-  it('reviews the newly submitted personal look before continuing a pending scan', () => {
-    expect(needsPersonalLookReview(personal, 'new-look')).toBe(true);
-    expect(needsPersonalLookReview(personal, undefined)).toBe(false);
-    expect(needsPersonalLookReview(personal, 'previous-look')).toBe(false);
-    expect(needsPersonalLookReview({ identity: { ...personal.identity!, status: 'training' } }, 'new-look')).toBe(false);
-    expect(needsPersonalLookReview({ identity: { status: 'ready', mode: 'faceswap', version: 'new-look' } }, 'new-look')).toBe(false);
+  it('uses a completed personal look immediately, including after reload', () => {
+    const completed = { ...enroll, id: 'new-look', status: 'completed' as const };
+    expect(onboardingProgress(personal, [completed], completed.id).screen).toBe('ready');
+    expect(onboardingProgress(personal, [completed]).screen).toBe('ready');
+    expect(onboardingProgress({ identity: { ...personal.identity!, status: 'training' } }, [completed]).ready).toBe(false);
   });
-  it('restores an unfinished review after reload without affecting another account or an ordinary return visit', () => {
-    const entries = new Map<string, string>();
+  it('ignores legacy pending reviews without losing account-specific failure recovery choices', () => {
+    const entries = new Map<string, string>([['thread:onboarding:alice', JSON.stringify({ pendingLookReview: 'new-look', keptPreviousEnrollmentId: 'failed-retake' })]]);
     const storage = { getItem: (key: string) => entries.get(key) ?? null, setItem: (key: string, value: string) => { entries.set(key, value); } };
-    saveOnboardingChoices('alice', { pendingLookReview: 'new-look' }, storage);
-    expect(needsPersonalLookReview(personal, readOnboardingChoices('alice', storage).pendingLookReview)).toBe(true);
+    expect(readOnboardingChoices('alice', storage)).toEqual({ keptPreviousEnrollmentId: 'failed-retake' });
     expect(readOnboardingChoices('bob', storage)).toEqual({});
     saveOnboardingChoices('alice', {}, storage);
-    expect(needsPersonalLookReview(personal, readOnboardingChoices('alice', storage).pendingLookReview)).toBe(false);
+    expect(readOnboardingChoices('alice', storage)).toEqual({});
   });
   it('persists the explicit previous-look choice without suppressing a later failed attempt', () => {
     let value = '';
@@ -90,7 +88,7 @@ describe('Personal-look review and account-specific choices', () => {
   });
   it('tolerates unavailable or malformed browser storage', () => {
     expect(readOnboardingChoices('alice', { getItem: () => '{broken' })).toEqual({});
-    expect(readOnboardingChoices('alice', { getItem: () => '{"pendingLookReview": 42}' }).pendingLookReview).toBeUndefined();
+    expect(readOnboardingChoices('alice', { getItem: () => '{"keptPreviousEnrollmentId": 42}' }).keptPreviousEnrollmentId).toBeUndefined();
     expect(readOnboardingChoices('alice', { getItem: () => { throw new Error('blocked'); } })).toEqual({});
     expect(() => saveOnboardingChoices('alice', {}, { setItem: () => { throw new Error('blocked'); } })).not.toThrow();
   });
