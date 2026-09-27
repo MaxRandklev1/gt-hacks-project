@@ -34,7 +34,7 @@ The private acceptance folders contain Jon with neutral and grinning references 
 
 - The final prompt was rerun for the three synthetic cases labelled `a`, `c` and `g` in `run4` (long curly hair, head covering and locs).
 - The saved Jon, grinning Jon and `b`, `d`, `e`, `f` examples in `run2` use an earlier prompt. They cannot establish that the final prompt works unchanged on all nine inputs.
-- Fresh final-prompt runs of both Jon references completed during this review. The smiling reference **again produced invented shoulder-length hair**; the neutral reference kept shorter hair. Both mouths were closed, and both polo outputs showed a gray/white remnant under the throat. The parser crops exactly matched the earlier test crops, and execution metadata confirmed the current prompt and 24 steps. Thus the claimed hair fix did not hold on this regression test. The owner's real onboarding trial and likeness judgment remain pending.
+- Fresh final-prompt runs of both Jon references completed during this review. The smiling reference **again produced invented shoulder-length hair**; the neutral reference kept shorter hair. Both mouths were closed, and both polo outputs showed a gray/white remnant under the throat. The parser crops exactly matched the earlier test crops, and execution metadata confirmed the current prompt and 24 steps. Thus the claimed hair fix did not hold on this regression test. The owner's subsequent live trial also failed their likeness assessment, as detailed below.
 - The agreed real-head-paste / Qwen / Qwen-plus-swap comparison was not carried out. This implementation selected Qwen personal-base generation directly.
 - Some examples visibly retain different skin color on the exposed hand/arm, and some hair-to-shoulder boundaries look soft or fringed. The parser and blending heuristics improve these areas but do not guarantee consistent skin or flawless matting.
 - Human recognition by the photographed people, a held-out real-person set, and full phone timing have not been established. No face-similarity score should be treated as a substitute for those judgments.
@@ -71,8 +71,22 @@ Also, the CPU thread claims every generation job. A legacy-account HyperSwap req
 
 Use the owner's fresh account and a current photo to measure live onboarding, inspect and explicitly accept or reject likeness, then scan the real demo garments. Record queue, generation, upload and visible-result time separately. Do not tune the prompt to that one person and call it universal. Follow with previously unseen real people covering the appearance and clothing edge cases above; keep failures and retakes in the reported result.
 
-## Live test preparation
+## Live account trial
 
 The reviewed web bundle and matching Firestore/Storage rules were deployed successfully to the existing Firebase project. The requested owner account's cloud app data was reset after verifying that all jobs were idle and stopping the verified worker; Google sign-in was retained. The worker restarted with all four garment caches ready. A read-back showed no measurements, identity or jobs, and Chrome displayed the new one-selfie onboarding form with US and metric units. Local development caches were not purged by this cloud-account reset.
 
-The next step requires the owner to complete onboarding with their own information and reference photo. Live completion, likeness approval and scan-to-visible-result timing have not yet been measured. Automated checks and local acceptance renders do not stand in for that trial.
+The owner then completed onboarding with their own information and selected photo. The first submission was rejected in **1.74 seconds** after the face detector reported two faces. A second submission succeeded, creating a ready `personal_base` identity in **65.83 seconds from Firestore job creation to final ready write**. This includes queue polling, processing, cloud storage and the completion write; it excludes the initial user photo upload, human entry time and browser image download. It is not a full onboarding stopwatch result.
+
+All three real garment requests completed, with results persisted under the same account:
+
+| Garment | Job creation to ready | Saved outputs |
+| --- | ---: | --- |
+| Navy striped polo | 2.46 s | 1024 PNG + 2048 JPEG |
+| Dragon graphic tee | 2.47 s | 1024 PNG + 2048 JPEG |
+| Olive hooded jacket | 1.71 s | 1024 PNG + 2048 JPEG |
+
+Chrome rendered all three private images in the live gallery. Output dimensions were checked on the downloaded private files. These timings include server-side result storage but exclude QR acquisition and browser display; physical camera-scanning latency was not independently timed. Private reference/result images and the live screenshot remain ignored local artifacts.
+
+**Likeness acceptance failed.** The owner said the major features were present but the chin, lips and overall facial proportions looked wrong, beyond the acceptable level of approximation. The generated look and clothing outputs must not be counted as a quality success just because jobs completed. The live polo also retained a visible collar remnant.
+
+The functional trial supports keeping the cached-garment architecture and continuing identity experiments. Before calling the product ready, complete the skipped real-photo / regenerated-head / regenerated-head-plus-face-correction comparison using the same inputs and person-neutral settings. Treat a correction pass as a candidate, not a proven remedy. Judge facial geometry and subject recognition alongside edges, expression and timing; do not increase steps or tune to one subject and assume the identity problem is solved.
