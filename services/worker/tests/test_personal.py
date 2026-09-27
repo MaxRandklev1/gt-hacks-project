@@ -72,6 +72,21 @@ class ComposeTests(unittest.TestCase):
         self.assertGreater(float(hair_matte(Image.fromarray(personal), pose, hair)[32, 24, 0]), 0.9)
 
 
+    def test_close_up_box_is_square_inside_the_image_and_blend_fades_at_its_border(self):
+        from services.worker.compose import blend_face, face_box
+        box = face_box(figure())
+        self.assertEqual(box[2] - box[0], box[3] - box[1])
+        self.assertTrue(0 <= box[0] and 0 <= box[1] and box[2] <= 200 and box[3] <= 200)
+        image = Image.new("RGB", (200, 200), (0, 0, 0))
+        mask = np.ones((512, 512), bool)
+        out = np.asarray(blend_face(image, Image.new("RGB", (512, 512), (255, 255, 255)), box, mask))
+        centre = ((box[0] + box[2]) // 2, (box[1] + box[3]) // 2)
+        self.assertGreater(out[centre[1], centre[0]].mean(), 240)       # Redrawn head used inside.
+        self.assertLess(out[box[1], box[0]].mean(), 5)                  # Crop edge never shows.
+        with self.assertRaises(CompositeError):
+            face_box(np.zeros((50, 50), np.uint8))
+
+
 class PersonalWorkerTests(unittest.TestCase):
     def make(self, temp):
         store, comfy = Mock(), Mock()

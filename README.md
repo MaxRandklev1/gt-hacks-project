@@ -12,6 +12,10 @@ The earlier trained-adapter path (eight photos, LoRA training, 80-step diffusion
 
 The project currently works on **still images**. Firebase hosts the app, authentication, queue and private assets; inference and training run on the local PC. The base pose and body come from the catalog image, so the result is a visual preview rather than a clothing-fit measurement. Firebase Storage was selected after the user enabled billing. A separately operated Linux server remains a future option and is not connected to this deployment.
 
+## Judge likeness by eye
+
+`.\scripts\start-likeness-lab.ps1` opens a local page (http://127.0.0.1:8765). Upload a selfie, compare shuffled versions of yourself (today's onboarding, a full-detail reference, a close-up face pass, a face-swap polish, and optional extra angles), pick the one that looks like you and note what's off. The winning version across people becomes onboarding's default. See the [Likeness Lab guide](comfy-identity/likeness_lab/README.md).
+
 ## Run the deployed demo
 
 Open the [three-code demo page](https://gt-hacks-thread-2026.firebaseapp.com/tags/demo-clothes.html) on a PC and scan a code with a phone. Each card also opens a larger code. The [local copy](docs/tags/demo-clothes.html) and individual tags can be displayed offline or printed with their white QR borders intact; the phone needs internet for the app. A new account retains the scanned selection through onboarding. Start the worker a few minutes before presenting so every active garment is pre-rendered; after that, onboarding and each scan take seconds. Scan one piece at a time and wait for its result before starting the next.

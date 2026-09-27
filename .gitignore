@@ -85,3 +85,4 @@ application_default_credentials.json
 /services/worker/.worker-cache/
 !/web/public/demo/*.png
 /comfy-identity/personal-base-acceptance/
+/comfy-identity/likeness-lab-sessions/

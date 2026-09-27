@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Likeness Lab</title>
+<style>
+  :root { --ink: #1d2118; --muted: #6d7263; --line: #dfe3d4; --bg: #f7f8f2; --card: #ffffff; --accent: #5f7d2c; --bad: #a33b2b; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --ink: #eef1e6; --muted: #a4aa98; --line: #3a4033; --bg: #15180f; --card: #1f2319; --accent: #a9c86f; --bad: #e5806f; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1180px; margin: 0 auto; padding: 28px 16px 60px; }
+  h1 { font-size: 30px; margin: 0 0 4px; } h2 { font-size: 19px; margin: 28px 0 10px; }
+  p.sub { color: var(--muted); margin: 0 0 18px; }
+  .panel { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
+  .garments { display: flex; gap: 10px; flex-wrap: wrap; }
+  .garments label { cursor: pointer; border: 2px solid transparent; border-radius: 10px; overflow: hidden; line-height: 0; }
+  .garments input { display: none; } .garments input:checked + img { outline: 3px solid var(--accent); outline-offset: -3px; }
+  .garments img { width: 120px; height: 120px; object-fit: cover; object-position: top; }
+  .uploads { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin-top: 14px; }
+  .drop { border: 1px dashed var(--line); border-radius: 10px; padding: 12px; }
+  .drop strong { display: block; } .drop small { color: var(--muted); }
+  .drop img { display: block; width: 100%; max-height: 220px; object-fit: contain; margin-top: 8px; border-radius: 8px; }
+  button { font: inherit; border: 0; border-radius: 8px; padding: 10px 16px; background: var(--ink); color: var(--bg); cursor: pointer; }
+  button.secondary { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+  button:disabled { opacity: .45; cursor: default; }
+  .status { margin-top: 14px; color: var(--muted); } .error { color: var(--bad); }
+  .compare { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 14px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px; }
+  .card.picked { outline: 3px solid var(--accent); }
+  .card h3 { margin: 2px 4px 8px; font-size: 16px; }
+  .card img { width: 100%; display: block; border-radius: 8px; }
+  .card .full { margin-top: 8px; }
+  .card button { width: 100%; margin-top: 10px; }
+  .reveal { font-size: 13px; color: var(--muted); margin: 8px 4px 0; }
+  .selfie-card img { max-height: 640px; object-fit: contain; }
+  .offs { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+  .offs label { border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; cursor: pointer; }
+  textarea { width: 100%; min-height: 70px; font: inherit; padding: 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--ink); }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Likeness Lab</h1>
+  <p class="sub">Upload a selfie, then pick the version that looks most like you. Versions are shuffled and unlabeled until you choose. Everything stays on this PC.</p>
+
+  <div class="panel" id="setup">
+    <strong>1. Garment</strong>
+    <div class="garments" id="garments">Loading…</div>
+    <div class="uploads">
+      <div class="drop"><strong>2. Your selfie (required)</strong><small>Face the camera, good light, whole face visible. Any expression.</small>
+        <input type="file" accept="image/jpeg,image/png,image/webp" id="selfie"><img id="selfiePreview" hidden alt="Selfie preview"></div>
+      <div class="drop"><strong>Extra angle (optional)</strong><small>Head turned slightly left. Take it now: same hair and facial hair as your selfie.</small>
+        <input type="file" accept="image/jpeg,image/png,image/webp" id="extra1"><img id="extra1Preview" hidden alt="Extra angle preview"></div>
+      <div class="drop"><strong>Extra angle (optional)</strong><small>Head turned slightly right. Take it now: same hair and facial hair as your selfie.</small>
+        <input type="file" accept="image/jpeg,image/png,image/webp" id="extra2"><img id="extra2Preview" hidden alt="Extra angle preview"></div>
+    </div>
+    <div class="row" style="margin-top:16px"><button id="run">Make my versions</button><span class="status" id="status"></span></div>
+  </div>
+
+  <section id="results" hidden>
+    <h2>Which one looks most like you?</h2>
+    <p class="sub">Judge the face crops first (top of each card). The full try-on is underneath.</p>
+    <div class="compare" id="compare"></div>
+    <div class="panel" style="margin-top:16px" id="feedback">
+      <strong>What's off in the one you picked (or in all of them)?</strong>
+      <div class="offs" id="offs"></div>
+      <textarea id="note" placeholder="Anything else? e.g. 'nose too narrow', 'looks 10 years younger'"></textarea>
+      <div class="row" style="margin-top:10px"><button class="secondary" id="none">None of these look like me</button><span class="status" id="pickStatus"></span></div>
+    </div>
+    <div class="row" style="margin-top:16px"><button class="secondary" id="again">Try another selfie</button></div>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const OFFS = ['Eyes', 'Nose', 'Mouth', 'Face shape', 'Age', 'Skin tone', 'Hair', 'Facial hair', 'Glasses', 'Expression'];
+let session = null, poll = null;
+
+$('offs').innerHTML = OFFS.map(o => `<label><input type="checkbox" value="${o}"> ${o}</label>`).join('');
+
+fetch('/api/garments').then(r => r.json()).then(list => {
+  $('garments').innerHTML = list.length ? list.map((g, i) =>
+    `<label><input type="radio" name="garment" value="${g.key}" ${i === 0 ? 'checked' : ''}><img src="/api/garment/${g.key}.jpg" alt="Garment ${i + 1}"></label>`).join('')
+    : '<span class="error">No garment renders are cached yet. Start the worker once so it prepares them.</span>';
+});
+
+async function toDataUrl(file) {
+  // Normalise orientation and size in the browser: max 2048 px, JPEG.
+  const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+  const scale = Math.min(1, 2048 / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(bitmap.width * scale); canvas.height = Math.round(bitmap.height * scale);
+  canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+  return canvas.toDataURL('image/jpeg', 0.94);
+}
+for (const id of ['selfie', 'extra1', 'extra2']) {
+  $(id).addEventListener('change', () => {
+    const file = $(id).files[0], preview = $(id + 'Preview');
+    if (file) { preview.src = URL.createObjectURL(file); preview.hidden = false; } else preview.hidden = true;
+  });
+}
+
+$('run').onclick = async () => {
+  const garment = document.querySelector('input[name=garment]:checked');
+  if (!$('selfie').files[0] || !garment) { $('status').innerHTML = '<span class="error">Choose a garment and a selfie.</span>'; return; }
+  $('run').disabled = true; $('status').textContent = 'Uploading…';
+  try {
+    const extras = [];
+    for (const id of ['extra1', 'extra2']) if ($(id).files[0]) extras.push(await toDataUrl($(id).files[0]));
+    const response = await fetch('/api/run', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ garment: garment.value, selfie: await toDataUrl($('selfie').files[0]), extras }) });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error);
+    session = data.id; started = Date.now(); watch();
+  } catch (error) { $('status').innerHTML = `<span class="error">${error.message}</span>`; $('run').disabled = false; }
+};
+
+let started = 0;
+function watch() {
+  clearInterval(poll);
+  poll = setInterval(async () => {
+    const data = await (await fetch('/api/session/' + session)).json();
+    const seconds = Math.round((Date.now() - started) / 1000);
+    if (data.status === 'running') { $('status').textContent = `${data.message} (${seconds}s — usually 3–5 minutes)`; return; }
+    clearInterval(poll); $('run').disabled = false;
+    if (data.status === 'failed') { $('status').innerHTML = `<span class="error">${data.message}</span>`; return; }
+    $('status').textContent = `Done in ${seconds}s.`; show(data);
+  }, 1500);
+}
+
+function show(data) {
+  $('results').hidden = false; $('pickStatus').textContent = '';
+  const selfie = `<div class="card selfie-card"><h3>Your selfie</h3><img src="/files/${data.id}/selfie.jpg" alt="Your selfie"></div>`;
+  $('compare').innerHTML = selfie + data.cards.map(c => `
+    <div class="card" id="card${c.label}"><h3>Version ${c.label}</h3>
+      <img src="/files/${data.id}/${c.face}" alt="Version ${c.label} face close-up">
+      <img class="full" src="/files/${data.id}/${c.full}" alt="Version ${c.label} full try-on">
+      <button data-label="${c.label}">This one looks most like me</button>
+      <div class="reveal" id="reveal${c.label}"></div></div>`).join('');
+  document.querySelectorAll('[data-label]').forEach(b => b.onclick = () => pick(b.dataset.label));
+  $('results').scrollIntoView({ behavior: 'smooth' });
+}
+
+async function pick(label) {
+  const whatsOff = [...document.querySelectorAll('#offs input:checked')].map(i => i.value);
+  const response = await fetch(`/api/session/${session}/pick`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ label, whatsOff, note: $('note').value }) });
+  const data = await response.json();
+  if (!response.ok) { $('pickStatus').innerHTML = `<span class="error">${data.error}</span>`; return; }
+  document.querySelectorAll('.card').forEach(c => c.classList.remove('picked'));
+  if (label !== 'none') $('card' + label).classList.add('picked');
+  for (const [l, info] of Object.entries(data.reveal || {}))
+    $('reveal' + l).textContent = `${info.version}: ${info.description} · onboarding ≈ ${info.onboardingSeconds}s of GPU`;
+  $('pickStatus').textContent = label === 'none' ? 'Saved: none looked like you. Your notes tell us what to fix.' : 'Saved. The versions are revealed below each card.';
+}
+$('none').onclick = () => pick('none');
+$('again').onclick = () => { $('results').hidden = true; for (const id of ['selfie', 'extra1', 'extra2']) { $(id).value = ''; $(id + 'Preview').hidden = true; } $('note').value = '';
+  document.querySelectorAll('#offs input').forEach(i => i.checked = false); window.scrollTo({ top: 0, behavior: 'smooth' }); };
+</script>
+</body>
+</html>

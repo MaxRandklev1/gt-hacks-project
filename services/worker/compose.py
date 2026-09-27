@@ -217,3 +217,32 @@ def compose(personal, garment_render, garment, hair, uncovered=None, pose_base=N
             alpha = feather(gap, feather_px)
             out = out * (1 - alpha) + filled.astype(np.float32) * alpha
     return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8))
+
+
+def face_box(labels, margin=0.35):
+    """Square box around the real head and hair, clamped inside the image (used for the close-up pass)."""
+    head = head_mask(labels)
+    if not head.any():
+        raise CompositeError("We couldn't find the head in the generated look.")
+    ys, xs = np.nonzero(head)
+    h, w = labels.shape
+    side = int(min(h, w, max(ys.max() - ys.min(), xs.max() - xs.min()) * (1 + margin)))
+    cx, cy = (xs.min() + xs.max()) / 2, (ys.min() + ys.max()) / 2
+    x0 = int(np.clip(cx - side / 2, 0, w - side))
+    y0 = int(np.clip(cy - side / 2, 0, h - side))
+    return x0, y0, x0 + side, y0 + side
+
+
+def blend_face(image, redrawn, box, mask):
+    """Blend a redrawn crop back into `image` at `box`, only inside `mask` (crop coordinates), fading
+    to zero before the crop border so the crop edge never shows."""
+    size = (box[2] - box[0], box[3] - box[1])
+    region = np.asarray(image.crop(box), np.float32)
+    source = np.asarray(redrawn.resize(size, Image.LANCZOS), np.float32)
+    alpha = feather(resize_mask(mask, size), max(2, size[0] // 40))[..., 0]
+    ramp = np.minimum.outer(np.minimum(np.arange(size[1]), np.arange(size[1])[::-1]),
+                            np.minimum(np.arange(size[0]), np.arange(size[0])[::-1])) / max(1.0, 0.06 * size[0])
+    alpha = (alpha * np.clip(ramp, 0, 1))[..., None]
+    out = image.copy()
+    out.paste(Image.fromarray(np.clip(region * (1 - alpha) + source * alpha, 0, 255).astype(np.uint8)), box[:2])
+    return out
