@@ -111,4 +111,6 @@ After scanning or selecting a garment, the result screen shows the current outfi
 
 ## Welcome page video
 
-The welcome page reserves a rectangle for the product walkthrough, shows a prominent **Sign in with Google** button, and uses the same sans-serif heading style throughout. Set the public build variable `VITE_HOMEPAGE_VIDEO_URL` to a hosted video URL when the clip is ready. The video plays muted, loops, supports inline phone playback, and exposes playback controls. Without a source (or if the video fails), the area shows a clear video placeholder. No placeholder media request is made.
+On phones, the welcome page shows the heading, product video, introduction, **Sign in with Google**, and three setup steps in that order. Compact spacing keeps the main flow visible on common phone viewports; desktop places the video beside the heading and copy.
+
+The bundled `/media/thread-reel.mp4` is a 19-second, silent H.264 Constrained Baseline level 3.1 video at 1280 × 720, 30 fps and `yuv420p`, with faststart metadata at the beginning (about 2.6 MB). Its versioned URL avoids reusing the earlier 1080p export. Firebase Hosting caches `/media/**` publicly for one hour to support CDN byte-range delivery; app pages keep their existing revalidation policy. The video plays muted, loops, supports inline phone playback, and exposes native controls when autoplay is unavailable. A media error offers a retry. `VITE_HOMEPAGE_VIDEO_URL` optionally overrides the bundled video with another directly playable media URL.

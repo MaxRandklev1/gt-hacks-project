@@ -385,7 +385,7 @@ function App() {
     </button>;
   }
 
-  return <div className="app-shell">
+  return <div className={`app-shell${screen === 'welcome' ? ' welcome-shell' : ''}`}>
     <header className="site-header"><button className="wordmark" aria-label="THREAD home" onClick={() => navigate(isMain ? 'scanner' : 'welcome')}>THREAD<BrandMark /></button><span className="header-caption">YOUR FITTING ROOM.</span><div className="header-actions">{user && isMain && <><LooksMenu active={screen === 'gallery' || screen === 'detail'} filter={looksFilter} onSelect={openLooks} /><button className="avatar" aria-label="Your profile" onClick={() => navigate('account')}>{user?.photoURL ? <img src={user.photoURL} alt="" referrerPolicy="no-referrer" /> : <Icon name="user" size={18} />}</button></>}</div></header>
     {error && <div className="global-message error-message" role="alert"><span>{error}</span><button onClick={() => setError('')} aria-label="Dismiss error"><Icon name="close" size={17} /></button></div>}
     {notice && <div className="global-message notice-message" role="status"><span>{notice}</span><button onClick={() => setNotice('')} aria-label="Dismiss message"><Icon name="close" size={17} /></button></div>}
@@ -396,16 +396,18 @@ function App() {
       {screen === 'loading' && <div className="loading-screen">{accountError && !authLoading ? <><Icon name="retry" size={30} /><h2>Let’s reconnect your profile.</h2><p role="alert">{accountError}</p><button className="button button-ink" onClick={() => { setAccountError(''); setError(''); setAuthLoading(true); setAuthRetry(value => value + 1); }}>Retry connection <Icon name="retry" size={17} /></button><button className="text-button" disabled={busy} onClick={logout}>Sign out</button></> : <><span className="spinner large" /><p>Opening your fitting room…</p></>}</div>}
 
       {screen === 'welcome' && <div className="welcome-layout fade-in">
-        <section className="welcome-copy">
+        <div className="welcome-heading">
           <div className="editorial-tag"><span className="status-dot" /> PERSONAL STYLE, PERSONALLY YOURS</div>
           <h1>A fitting room.<br />Made for you.</h1>
+        </div>
+        <HomepageVideo />
+        <section className="welcome-copy" aria-label="Get started with THREAD">
           <p className="hero-description">Found a piece you love?<br />See yourself in it before you decide.</p>
           <div className="welcome-cta"><button className="button button-ink google-button" onClick={login} disabled={busy || !firebaseConfigured}>{busy ? <span className="spinner" /> : <GoogleMark />}Sign in with Google<Icon name="arrow" size={18} /></button></div>
           {!firebaseConfigured && <p className="config-note" role="status">Sign-in is unavailable on this deployment. Please try again once account access has been configured.</p>}
-          <p className="privacy-line"><Icon name="shield" size={15} /> Your photos. Your private fitting room.</p>
           <div className="how-it-works"><div><span>01</span><p>Make it yours<small>One selfie. Two details.</small></p></div><div><span>02</span><p>Scan a piece<small>Look for a THREAD QR.</small></p></div><div><span>03</span><p>See the possibility<small>Your own virtual try-on.</small></p></div></div>
+          <p className="privacy-line"><Icon name="shield" size={15} /> Your photos. Your private fitting room.</p>
         </section>
-        <HomepageVideo />
       </div>}
 
       {(['measurements', 'selfie'] as Screen[]).includes(screen) && <div className="onboarding-layout fade-in">
