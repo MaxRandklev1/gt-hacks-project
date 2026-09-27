@@ -2,9 +2,11 @@
 
 Goal: an unfamiliar person uploads one selfie and sees themselves (face, hair or head covering, beard, glasses, skin tone) in each catalog garment, in the model's pose, with a neutral expression. Nothing is prepared per person ahead of time.
 
+New onboarding selects one of five body templates from the person's saved height and weight. The personal base and cached garment renders use the same template; the saved selection stays fixed until the person rebuilds their look. Existing accounts retain their previous pose. See [BMI ranges, catalog publication and cache preparation](../docs/BODY_TEMPLATES.md).
+
 ## How it works
 
-1. **Once per garment (worker startup):** `Qwen21_Garment_Styled_2K.api.json` dresses the fixed base model in the garment. Output 1024 + 2K, cached under `.local/firebase-worker/styled/`. Its garment mask is computed once on the CPU.
+1. **Once per garment and body template (catalog preparation):** `Qwen21_Garment_Styled_2K.api.json` dresses the selected base model in the garment. Output 1024 + 2K, cached under `.local/firebase-worker/styled/`. Its garment mask is computed once on the CPU.
 2. **Once per person (onboarding, GPU, ~50 s warm):**
    - The selfie is parsed and cropped to head and shoulders. With no usable face, the user is asked to retake it.
    - `Qwen21_Personal_Base_2K.api.json` (BFS head-swap LoRA, selfie as reference, person-neutral prompt, neutral closed-mouth expression, 24 steps, texture pass skipped) regenerates the whole head and exposed skin on the pose base.
@@ -39,7 +41,7 @@ Results (visual review by the developer; the people themselves have not reviewed
   - scans 1.35–1.56 s, including while another person's onboarding ran on the GPU
 - Firebase round trips and phone upload/download are additional and not measured live.
 
-Known limits: a faint soft seam can remain where long hair meets a garment whose shoulder sits lower than the base tee. The body, pose and build are the base model's: this is an appearance preview, not a fit or body-shape estimate. Garments must cover at least the base tee's area. The acceptance people are synthetic; real judges' own likeness judgement is still the real test.
+Known limits: a faint soft seam can remain where long hair meets a garment whose shoulder sits lower than the base tee. The body and pose come from the selected template: this is an appearance preview, not an exact fit or body-shape estimate. Garments must cover at least the base tee's area. The acceptance people are synthetic; real judges' own likeness judgement is still the real test.
 
 ## Commands
 

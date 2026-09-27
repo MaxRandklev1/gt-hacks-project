@@ -35,6 +35,12 @@ def ready_identity(reference=png()):
             "referenceSha256": sha256(reference)}
 
 
+def body_garment():
+    return {"active": True, "imagePath": "garments/shirt/reference.png", "baseImagePath": "garments/shirt/base.png",
+            "bodyBaseImagePaths": {f"weight-{i}": "garments/shirt/base.png" if i == 3 else f"garments/shirt/body-bases/weight-{i}.png"
+                                  for i in range(1, 6)}}
+
+
 class EnrollContractTests(unittest.TestCase):
     def test_selfie_only_request_contract(self):
         job = enroll_job()
@@ -74,7 +80,7 @@ class FaceSwapWorkerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             worker, store, comfy, lease = self.make(temp)
             store.download.return_value = png()
-            garment = {"active": True, "imagePath": "garments/shirt/reference.png", "baseImagePath": "garments/shirt/base.png"}
+            garment = body_garment()
             store.active_garments.return_value = [("shirt", garment)]
             worker.styled_garment = Mock(return_value=("render1", (Path("a.png"), Path("b.png")), "pose1"))
             worker.personal_base = Mock(return_value=(png(), png((32, 32)), png(), png()))
@@ -101,7 +107,7 @@ class FaceSwapWorkerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             worker, store, _, lease = self.make(temp)
             store.download.return_value = png()
-            store.active_garments.return_value = [("shirt", {"active": True, "imagePath": "garments/shirt/reference.png", "baseImagePath": "garments/shirt/base.png"})]
+            store.active_garments.return_value = [("shirt", body_garment())]
             worker.styled_garment = Mock(return_value=("render1", (Path("a.png"), Path("b.png")), "pose1"))
             worker.personal_base = Mock(side_effect=CompositeError("We couldn't find a clear face."))
             with self.assertRaisesRegex(JobError, "clear face"):

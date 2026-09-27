@@ -6,7 +6,7 @@ For automatic 4096 × 4096 output, use `Qwen21_Universal_TryOn_4K.json`. To upsc
 
 ## Inputs
 
-- **Fixed pose:** the ChatGPT-generated white-shirt model in `ClothesSwap/ChatGPT Image Sep 26, 2026, 01_31_17 PM.png`. The workflow resizes it to about one megapixel for the local GPU.
+- **Fixed pose:** the ChatGPT-generated white-shirt model in `ClothesSwap/Pose1_Weight3.png`. The workflow resizes it to about one megapixel for the local GPU.
 - **Person:** the existing photo-folder/profile panel. Jon is selected for the initial example. Select another saved person or upload their photo folder and train their identity profile using the existing controls.
 - **Garment:** `ClothesSwap/Screenshot 2026-09-26 125422.png`. Replace the image in the garment upload node to use a different shirt.
 

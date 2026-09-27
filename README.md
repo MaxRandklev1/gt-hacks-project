@@ -4,13 +4,13 @@
 
 THREAD is a deployed virtual try-on web app backed by Firebase and a local ComfyUI GPU worker. A garment QR code opens its item in the app. After Google sign-in, onboarding is **height/weight, one selfie and consent** — no photo set and no identity training. In about a minute the worker builds the person's **personal base**: the fixed model pose with their own face, hair or head covering, beard, glasses and skin tone, and a neutral expression whatever face they pulled in the selfie. Every scan then composites the garment onto that look on the CPU in about 1.4 seconds of worker time, saving a 1024 PNG and a 2048 × 2048 JPEG. See the [personal-base guide](comfy-identity/FAST_TRYON_README.md).
 
-Each garment is rendered once on the base model with Qwen Image 2.1 when the worker starts. The body, pose and build are the base model's, so results are an appearance preview, not a fit estimate.
+Each garment is rendered once per body template with Qwen Image 2.1 and cached. New onboarding uses height and weight to select one of five supplied pose/body templates by BMI, then uses that same template for every scan. Results remain an approximate appearance preview, not a fit estimate. See the [template ranges and setup](docs/BODY_TEMPLATES.md).
 
 Take a selfie with the camera or choose a recent one from the photo library. Measurements default to **feet, inches and pounds**, with a metric option. The app stores normalized centimetres/kilograms and the chosen display preference.
 
 The earlier trained-adapter path (eight photos, LoRA training, 80-step diffusion + 4K upscale, several minutes per image) remains available with the worker's `--pipeline qwen` flag and its workflows below; existing trained accounts keep working on the fast path through their saved reference selfie.
 
-The project currently works on **still images**. Firebase hosts the app, authentication, queue and private assets; inference and training run on the local PC. The base pose and body come from the catalog image, so the result is a visual preview rather than a clothing-fit measurement. Firebase Storage was selected after the user enabled billing. A separately operated Linux server remains a future option and is not connected to this deployment.
+The project currently works on **still images**. Firebase hosts the app, authentication, queue and private assets; inference and training run on the local PC. Existing accounts retain their saved body until rebuilt through **Update details and rebuild look**. Firebase Storage was selected after the user enabled billing. A separately operated Linux server remains a future option and is not connected to this deployment.
 
 ## Judge likeness by eye
 

@@ -96,6 +96,32 @@ class PersonalBaseMixin:
         folder = self.pose_dir(base_key)
         return all((folder / name).is_file() for name in ("base-1024.png", "base-2k.png"))
 
+    def prepare_pose(self, base_key, guard):
+        """Cache only the fixed pose resize/upscale; no identity profile, diffusion or face edit."""
+        if self.pose_ready(base_key):
+            return False
+        guard()
+        graph = {key: json.loads(json.dumps(self.personal_template[key]))
+                 for key in ("1", "31", "33", "39", "40", "41", "42", "43")}
+        expected = {"1": "LoadImage", "31": "ImageScaleToTotalPixels", "33": "UpscaleModelLoader",
+                    "39": "SplitImageWithAlpha", "40": "ImageUpscaleWithModel", "41": "ImageScaleBy",
+                    "42": "SaveImage", "43": "SaveImage"}
+        if any(graph[key].get("class_type") != value for key, value in expected.items()):
+            raise CompositeError("The configured pose preparation graph is invalid.")
+        graph["1"]["inputs"]["image"] = self.comfy.upload_image(self.pose_dir(base_key) / "source.png")
+        for node in ("42", "43"):
+            graph[node]["inputs"]["filename_prefix"] = f"PoseBase/{safe_id(base_key)}/node{node}"
+        prompt_id = self.comfy.submit(graph, "pose-" + safe_id(base_key))
+        result = self.comfy.wait_generation(prompt_id, guard, lambda: None, timeout=300, interval=0.5)
+        base = Image.open(io.BytesIO(self.comfy.output(result, "43"))).convert("RGB")
+        upscale = Image.open(io.BytesIO(self.comfy.output(result, "42"))).convert("RGB")
+        if upscale.size != (2 * base.width, 2 * base.height):
+            raise CompositeError("The pose upscale returned unexpected dimensions.")
+        guard()
+        atomic_write(self.pose_dir(base_key) / "base-1024.png", png_bytes(base))
+        atomic_write(self.pose_dir(base_key) / "base-2k.png", png_bytes(upscale))
+        return True
+
     def pose(self, base_key):
         folder = self.pose_dir(base_key)
         cache = getattr(self, "_pose_cache", None)

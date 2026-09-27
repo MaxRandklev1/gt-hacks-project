@@ -6,7 +6,7 @@ import requests
 root=Path(__file__).resolve().parent
 folder=root.parent/'ClothesSwap'
 sources={
-    'tryon_pose_base.png':folder/'ChatGPT Image Sep 26, 2026, 01_31_17 PM.png',
+    'tryon_pose_base.png':folder/'Pose1_Weight3.png',
     'tryon_shirt_reference.png':folder/'Screenshot 2026-09-26 125422.png',
 }
 report={}

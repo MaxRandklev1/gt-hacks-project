@@ -23,12 +23,14 @@ import uuid
 from PIL import Image, ImageOps
 
 try:
+    from .body_templates import BODY_TEMPLATE_IDS, body_catalog_paths, select_body_template
     from .comfy import ComfyClient, ComfyError, LocalProfiles, patch_graph, patch_personal_graph, patch_styled_graph, patch_swap_graph, safe_id
     from .parsing import DEFAULT_MODEL as PARSING_MODEL
     from .personal import CompositeError, PersonalBaseMixin, personal_paths
     from .photo_selection import select_best_photos
     from .selfie import validate_selfie
 except ImportError:
+    from body_templates import BODY_TEMPLATE_IDS, body_catalog_paths, select_body_template
     from comfy import ComfyClient, ComfyError, LocalProfiles, patch_graph, patch_personal_graph, patch_styled_graph, patch_swap_graph, safe_id
     from parsing import DEFAULT_MODEL as PARSING_MODEL
     from personal import CompositeError, PersonalBaseMixin, personal_paths
@@ -202,14 +204,35 @@ def validate_finalize_context(uid, training_id, user, training, draft):
     return identity
 
 
-def validate_garment(garment_id, garment):
+def validate_garment(garment_id, garment, body_template_id=None):
     safe_id(garment_id)
     if not garment or garment.get("active") is not True:
         raise JobError("This garment is no longer available.")
     expected = {"imagePath": f"garments/{garment_id}/reference.png", "baseImagePath": f"garments/{garment_id}/base.png"}
     if any(garment.get(key) != path for key, path in expected.items()):
         raise JobError("This garment needs its catalog images configured by the project owner.")
+    if body_template_id is not None:
+        try:
+            return body_catalog_paths(garment_id, garment, body_template_id)
+        except ValueError as error:
+            raise JobError("This piece is not configured for your body template yet. Please try another piece.") from error
     return expected
+
+
+def saved_body_template(identity):
+    """Use the enrollment snapshot, never later edits to the account's measurements."""
+    if "bodyTemplate" not in identity:
+        return None  # Earlier personal bases remain attached to the original catalog pose.
+    snapshot = identity["bodyTemplate"]
+    if not isinstance(snapshot, dict):
+        raise JobError("Your saved body template is incomplete. Set up your look again.")
+    try:
+        expected = select_body_template(snapshot.get("heightCm"), snapshot.get("weightKg"))
+    except (ValueError, TypeError):
+        raise JobError("Your saved measurements are invalid. Set up your look again.") from None
+    if any(snapshot.get(key) != value for key, value in expected.items()):
+        raise JobError("Your saved body template does not match its measurements. Set up your look again.")
+    return expected["id"]
 
 
 def clean_image(data, destination):
@@ -701,6 +724,10 @@ class Worker(PersonalBaseMixin):
                 or type(user.get("weightKg")) not in (int, float) or not 25 <= user["weightKg"] <= 300
                 or user.get("measurementSystem") not in ("us", "metric")):
             raise JobError("Save your height and weight before finishing onboarding.")
+        try:
+            body_template = select_body_template(user["heightCm"], user["weightKg"])
+        except (ValueError, TypeError):
+            raise JobError("Save valid height and weight measurements before finishing onboarding.") from None
         lease.write({"stage": "checking_selfie", "message": "Checking your selfie.", "progress": 0.05})
         reference_data, provenance = self.reference(job, folder)
         destinations = faceswap_paths(uid, job_id)
@@ -708,16 +735,16 @@ class Worker(PersonalBaseMixin):
         self.cache_reference(reference_sha, reference_data)
         bases = {}
         for garment_id, garment in self.store.active_garments():
-            try:
-                catalog_paths = validate_garment(garment_id, garment)
-            except JobError:
-                continue
+            catalog_paths = validate_garment(garment_id, garment, body_template["id"])
             key, outputs, base_key = self.styled_garment(
                 garment_id, garment, catalog_paths, folder, lease.guard,
-                lambda message: lease.write({"stage": "preparing_pieces", "message": message, "progress": 0.1}))
+                lambda message: lease.write({"stage": "preparing_pieces", "message": message, "progress": 0.1}),
+                allow_render=False)
             bases.setdefault(base_key, []).append((key, outputs))
         if not bases:
             raise JobError("No pieces are available yet. Try again shortly.")
+        if len(bases) != 1:
+            raise JobError("The catalog body templates do not share the same pose. Please try again after the catalog is corrected.")
         records, uploads = {}, [(destinations["referencePath"], reference_data, "image/png")]
         try:
             for base_key in bases:
@@ -733,7 +760,7 @@ class Worker(PersonalBaseMixin):
             raise JobError(str(error)) from None
         manifest = {"schemaVersion": 5, "mode": "personal_base", "uid": uid, "version": job_id, **destinations,
                     **{key: value.isoformat() if isinstance(value, datetime) else value for key, value in provenance.items()},
-                    "referenceSha256": reference_sha, "personalBases": records}
+                    "referenceSha256": reference_sha, "personalBases": records, "bodyTemplate": body_template}
         uploads.append((destinations["manifestPath"], json.dumps(manifest).encode(), "application/json"))
         lease.write({"stage": "saving_look", "message": "Saving your look.", "progress": 0.92})
         with ThreadPoolExecutor(max_workers=4) as pool:
@@ -742,7 +769,7 @@ class Worker(PersonalBaseMixin):
         preview = next(iter(records.values()))["p1024"]
         identity = {"status": "ready", "mode": "personal_base", "version": job_id, **destinations, **provenance,
                     "referenceSha256": reference_sha, "personalBases": records, "previewPath": preview,
-                    "error": None, "updatedAt": now()}
+                    "error": None, "updatedAt": now(), "bodyTemplate": body_template}
         lease.write({"status": "completed", "stage": "ready", "message": "Your fitting room is ready.", "progress": 1.0},
                     user_fields={"identity": identity})
         # Garment masks are CPU work the first scan would otherwise pay for.
@@ -789,7 +816,7 @@ class Worker(PersonalBaseMixin):
             cached = self.cache_reference(digest, data)
         return clean_image(cached.read_bytes(), folder / "selfie.png")
 
-    def styled_garment(self, garment_id, garment, catalog_paths, folder, guard, notify):
+    def styled_garment(self, garment_id, garment, catalog_paths, folder, guard, notify, *, allow_render=True):
         """Base model wearing this garment (1024 + 2K). Rendered once with Qwen, then cached locally."""
         stamp = garment.get("updatedAt")
         stamp = stamp.isoformat() if isinstance(stamp, datetime) else str(stamp)
@@ -799,6 +826,8 @@ class Worker(PersonalBaseMixin):
         base_file = directory / "base-key.txt"
         if all(path.is_file() for path in outputs) and base_file.is_file():
             return key, outputs, base_file.read_text().strip()
+        if not allow_render and not all(path.is_file() for path in outputs):
+            raise JobError("This piece's body template is still being prepared. Please try again shortly.")
         base = clean_image(self.store.download(catalog_paths["baseImagePath"], MAX_IMAGE_BYTES), folder / "base.png")
         base_key = self.register_pose_source(base.read_bytes())
         if all(path.is_file() for path in outputs):
@@ -823,20 +852,47 @@ class Worker(PersonalBaseMixin):
         base_file.write_text(base_key)
         return key, outputs, base_key
 
-    def prewarm(self):
-        """Before the demo: render every active garment once and load the face-swap models."""
-        rendered = []
+    def prewarm(self, body_template_ids=None, garment_ids=None, *, warm_swapper=True, strict=False):
+        """Prepare catalog variants and pose upscales once, without creating personal bases."""
+        if body_template_ids is not None:
+            body_template_ids = tuple(dict.fromkeys(body_template_ids))
+            if not body_template_ids or any(value not in BODY_TEMPLATE_IDS for value in body_template_ids):
+                raise JobError("Choose one or more configured body template IDs.")
+        requested_garments = set(garment_ids) if garment_ids else None
+        if requested_garments:
+            for garment_id in requested_garments:
+                safe_id(garment_id)
+        rendered, failures, found = [], [], set()
+        pose_count, prepared_count = 0, 0
         for garment_id, garment in self.store.active_garments():
-            try:
-                catalog_paths = validate_garment(garment_id, garment)
-                with tempfile.TemporaryDirectory(prefix="prewarm-", dir=self.state_dir) as folder:
-                    started = time.monotonic()
-                    rendered.append(self.styled_garment(garment_id, garment, catalog_paths, Path(folder), lambda: None,
-                                                        lambda message, g=garment_id: logging.info("%s: %s", g, message)))
-                    logging.info("Garment %s ready in %.1f s.", garment_id, time.monotonic() - started)
-            except Exception:
-                logging.exception("Could not prepare garment %s.", garment_id)
-        if rendered:
+            if requested_garments and garment_id not in requested_garments:
+                continue
+            found.add(garment_id)
+            variants = body_template_ids or (BODY_TEMPLATE_IDS if "bodyBaseImagePaths" in garment else (None,))
+            for body_id in variants:
+                try:
+                    catalog_paths = validate_garment(garment_id, garment, body_id)
+                    if not self.comfy.idle():
+                        raise JobError("ComfyUI is busy. Wait for its current work before preparing catalog variants.")
+                    with tempfile.TemporaryDirectory(prefix="prewarm-", dir=self.state_dir) as folder:
+                        started = time.monotonic()
+                        entry = self.styled_garment(garment_id, garment, catalog_paths, Path(folder), lambda: None,
+                                                   lambda message, g=garment_id: logging.info("%s: %s", g, message))
+                        rendered.append(entry)
+                        if not self.comfy.idle():
+                            raise JobError("ComfyUI became busy before pose preparation. Run preparation again when idle.")
+                        pose_count += int(self.prepare_pose(entry[2], lambda: None))
+                        # Masks also stay on disk so the first live scan does not parse the garment.
+                        self.garment_masks(entry[0], entry[1], entry[2])
+                        prepared_count += 1
+                        logging.info("Garment %s / %s ready in %.1f s.", garment_id, body_id or "legacy", time.monotonic() - started)
+                except Exception:
+                    failures.append({"garmentId": garment_id, "bodyTemplateId": body_id})
+                    logging.exception("Could not prepare garment %s / %s.", garment_id, body_id or "legacy")
+        if requested_garments:
+            failures.extend({"garmentId": garment_id, "bodyTemplateId": None}
+                            for garment_id in sorted(requested_garments - found))
+        if rendered and warm_swapper:
             # The base model's own face is a harmless source that loads the detector/swapper sessions.
             key, outputs, _ = rendered[0]
             names = self.comfy_styled_inputs(key, outputs)
@@ -844,6 +900,11 @@ class Worker(PersonalBaseMixin):
                                      styled_2k_image=names[1], job_id="prewarm-" + uuid.uuid4().hex[:12])
             self.comfy.wait_generation(self.comfy.submit(graph, "prewarm"), lambda: None, lambda: None, timeout=300, interval=0.2)
             logging.info("Face swapper warmed; %d garment(s) ready.", len(rendered))
+        report = {"variantsPrepared": prepared_count,
+                  "posesPrepared": pose_count, "failures": failures}
+        if strict and failures:
+            raise JobError(f"Catalog preparation failed for {len(failures)} variant(s); inspect the worker log before onboarding.")
+        return report
 
     def comfy_styled_inputs(self, key, outputs):
         if key not in self.comfy_inputs:
@@ -854,10 +915,13 @@ class Worker(PersonalBaseMixin):
         if self.pipeline == "qwen":
             return self.generate_qwen(job_id, job, uid, user, folder, lease)
         garment = self.store.garment(job["garmentId"])
-        catalog_paths = validate_garment(job["garmentId"], garment)
+        identity = user.get("identity")
+        body_id = saved_body_template(identity) if isinstance(identity, dict) and identity.get("mode") == "personal_base" else None
+        catalog_paths = validate_garment(job["garmentId"], garment, body_id)
         history = {"uid": uid, "jobId": job_id, "garmentId": job["garmentId"],
                    "garmentName": str(garment.get("name", "Garment"))[:160], "status": "running", "createdAt": now()}
-        identity = user.get("identity")
+        if body_id is not None:
+            history["bodyTemplateId"] = body_id
         if isinstance(identity, dict) and identity.get("status") == "ready" and identity.get("mode") == "personal_base":
             return self.generate_personal(job_id, job, uid, identity, folder, lease, garment, catalog_paths, history)
         # Earlier face-swap and trained identities: HyperSwap from their saved selfie.
@@ -894,7 +958,8 @@ class Worker(PersonalBaseMixin):
         safe_id(identity.get("version"))
         key, styled, base_key = self.styled_garment(
             job["garmentId"], garment, catalog_paths, folder, lease.guard,
-            lambda message: lease.write({"stage": "styling", "message": message, "progress": 0.1}, generation=history))
+            lambda message: lease.write({"stage": "styling", "message": message, "progress": 0.1}, generation=history),
+            allow_render="bodyTemplate" not in identity)
         lease.write({"stage": "generating", "message": "Putting the piece on you.", "progress": 0.4}, generation=history)
         try:
             personal = self.personal_assets(uid, identity, base_key)
@@ -1079,9 +1144,17 @@ def main(argv=None):
     parser.add_argument("--pipeline", choices=("faceswap", "qwen"), default="faceswap",
                         help="faceswap (default): cached garment render + selfie face swap in seconds. qwen: earlier trained-adapter diffusion path.")
     parser.add_argument("--no-prewarm", action="store_true", help="Skip rendering uncached active garments and warming the face swapper at startup.")
+    parser.add_argument("--prewarm-only", action="store_true", help="Prepare garment/body variants and fixed-pose upscales, then exit without consuming user jobs.")
+    parser.add_argument("--body-template", action="append", choices=BODY_TEMPLATE_IDS,
+                        help="With --prewarm-only: prepare only this body template; repeat to choose several.")
+    parser.add_argument("--garment", action="append", help="With --prewarm-only: prepare only this active garment ID; repeat to choose several.")
     args = parser.parse_args(argv)
     if not args.project or not args.bucket:
         parser.error("Set FIREBASE_PROJECT_ID and FIREBASE_STORAGE_BUCKET, or pass --project and --bucket.")
+    if args.prewarm_only and (args.check or args.once or args.no_prewarm or args.pipeline != "faceswap"):
+        parser.error("--prewarm-only cannot be combined with --check, --once, --no-prewarm, or --pipeline qwen.")
+    if (args.body_template or args.garment) and not args.prewarm_only:
+        parser.error("--body-template and --garment require --prewarm-only.")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     if args.check:
         try:
@@ -1104,11 +1177,17 @@ def main(argv=None):
     with process_lock(args.state_dir / "gpu.lock"):
         store = FirebaseStore(args.project, args.bucket)
         worker = Worker(store, comfy, LocalProfiles(args.profiles_root), template, args.state_dir, pipeline=args.pipeline)
+        if args.prewarm_only:
+            if not comfy.idle():
+                raise JobError("ComfyUI must be idle before catalog preparation. No user jobs were consumed.")
+            report = worker.prewarm(args.body_template, args.garment, warm_swapper=False, strict=True)
+            print(json.dumps(report, indent=2))
+            return
         if args.pipeline == "faceswap" and not args.no_prewarm:
             try:
                 worker.prewarm()
             except Exception:
-                logging.exception("Prewarm failed; uncached garments will render on their first request.")
+                logging.exception("Prewarm failed; new body-template looks require prepared variants. Run --prewarm-only before onboarding.")
         # Two lanes: GPU work (onboarding/training) and CPU try-on compositing, so a scan never
         # waits behind someone else's onboarding. The qwen pipeline renders try-ons on the GPU.
         gpu_kinds = GPU_KINDS | (CPU_KINDS if args.pipeline == "qwen" else frozenset())

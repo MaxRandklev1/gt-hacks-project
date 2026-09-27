@@ -7,10 +7,14 @@ import { CONSENT_VERSION, validateMeasurements, validateReferenceSelfie } from '
 
 export type SessionUser = Pick<User, 'uid' | 'displayName' | 'email' | 'photoURL'>;
 export type PhotoSelection = { index: number; selected: boolean; score: number; reason: string };
+export type BodyTemplateSelection = {
+  id: 'weight-1' | 'weight-2' | 'weight-3' | 'weight-4' | 'weight-5';
+  bmi: number; heightCm: number; weightKg: number; policyVersion: 'bmi-visual-v1';
+};
 export type UserProfile = {
   displayName?: string; email?: string; photoURL?: string; heightCm?: number; weightKg?: number; measurementSystem?: 'us' | 'metric';
   trainingJobId?: string;
-  identity?: { status: 'selecting' | 'training' | 'awaiting_reference' | 'ready' | 'failed'; mode?: 'faceswap' | 'personal_base'; previewPath?: string; selectedPhotos?: PhotoSelection[]; error?: string; version?: string; profileId?: string };
+  identity?: { status: 'selecting' | 'training' | 'awaiting_reference' | 'ready' | 'failed'; mode?: 'faceswap' | 'personal_base'; previewPath?: string; selectedPhotos?: PhotoSelection[]; error?: string; version?: string; profileId?: string; bodyTemplate?: BodyTemplateSelection };
 };
 export type Job = { id: string; uid: string; kind: 'train' | 'finalize' | 'enroll' | 'generate'; requestVersion?: number; trainingJobId?: string; status: 'queued' | 'running' | 'completed' | 'failed'; stage?: string; message?: string; progress?: number; error?: string; garmentId?: string; createdAt?: Timestamp };
 export type Garment = { id: string; name: string; brand?: string; description?: string; imagePath: string; baseImagePath: string; thumbnailPath?: string; active: boolean };

@@ -9,9 +9,11 @@ python comfy-identity/run_personal_base_acceptance.py --name run1 --garments thr
 Run with the worker environment (services/worker/.venv) while the worker is idle.
 """
 import argparse
+import hashlib
 import io
 import json
 from pathlib import Path
+import re
 import sys
 import time
 
@@ -21,12 +23,13 @@ from PIL import Image, ImageDraw
 import numpy as np
 
 from services.worker.comfy import ComfyClient
+from services.worker.catalog import normalized_png
 from services.worker.compose import (alignment_score, base_regions, compose, covering_mask, edit_region, garment_mask,
                                      head_crop, lock_personal_base, resize_mask)
 from services.worker.parsing import HumanParser, group_mask
 
 GRAPH = ROOT / "comfy-identity/Qwen21_Personal_Base_2K.api.json"
-BASE = ROOT / "ClothesSwap/ChatGPT Image Sep 26, 2026, 01_31_17 PM.png"
+BASE = ROOT / "ClothesSwap/Pose1_Weight3.png"
 STYLED = ROOT / ".local/firebase-worker/styled"
 
 
@@ -42,20 +45,38 @@ def main():
     parser.add_argument("--person", action="append", required=True, help="label=path/to/selfie")
     parser.add_argument("--garments", nargs="+", required=True, help="Worker styled-cache keys or garment ids listed in --garment-map")
     parser.add_argument("--garment-map", type=Path, help="JSON {garment_id: styled_cache_key}")
+    parser.add_argument("--base", type=Path, default=BASE,
+                        help="Pose source image; use garment cache variants rendered on this same body (default: Pose1_Weight3.png).")
     parser.add_argument("--steps", type=int, default=24)
     parser.add_argument("--reuse", action="store_true", help="Re-composite saved raw personal bases without generating again.")
     args = parser.parse_args()
     out = ROOT / "comfy-identity/personal-base-acceptance" / args.name
+    base_source = out / "pose_base_source.png"
+    try:
+        mapping = json.loads(args.garment_map.read_text()) if args.garment_map else {}
+        if not isinstance(mapping, dict):
+            raise ValueError("The garment map must be a JSON object of garment IDs to cache keys.")
+        base_data, _ = normalized_png(args.base)
+        base_key = hashlib.sha256(base_data).hexdigest()[:32]
+        for garment in args.garments:
+            key = mapping.get(garment, garment)
+            if not isinstance(key, str) or not re.fullmatch(r"[0-9a-f]{32}", key):
+                raise ValueError(f"Garment {garment} needs a valid styled-cache key in --garment-map.")
+            cached_base = (STYLED / key / "base-key.txt").read_text().strip()
+            if cached_base != base_key:
+                raise ValueError(f"Garment {garment} was rendered on a different body. Match --base to its cached pose.")
+        if args.reuse and base_source.is_file() and normalized_png(base_source)[0] != base_data:
+            raise ValueError("This acceptance run used a different pose. Choose a new --name instead of --reuse.")
+    except (ValueError, OSError) as error:
+        parser.error(str(error))
     out.mkdir(parents=True, exist_ok=True)
-    mapping = json.loads(args.garment_map.read_text()) if args.garment_map else {}
     human, comfy = HumanParser(), ComfyClient()
     template = json.loads(GRAPH.read_text(encoding="utf-8"))
 
     # Pose base (same 1 MP resize the garment renders used) and its 2K upscale, made once.
-    base_source = out / "pose_base_source.png"
-    Image.open(BASE).convert("RGB").save(base_source)
+    base_source.write_bytes(base_data)
     base_name = comfy.upload_image(base_source)
-    report = {"steps": args.steps, "people": {}, "garments": {}}
+    report = {"steps": args.steps, "baseKey": base_key, "people": {}, "garments": {}}
 
     garments = {}
     state = {}

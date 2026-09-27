@@ -19,8 +19,10 @@ from PIL import Image, ImageOps
 
 try:
     from .comfy import safe_id
+    from .body_templates import BODY_TEMPLATE_IDS, body_catalog_paths
 except ImportError:
     from comfy import safe_id
+    from body_templates import BODY_TEMPLATE_IDS, body_catalog_paths
 
 
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
@@ -158,6 +160,78 @@ def configure_cors(bucket, origins):
     return {"origins": origins, "methods": ["GET", "HEAD"], "maxAgeSeconds": 3600}
 
 
+def _identical_blob(blob, data):
+    """Verify bytes under a generation precondition; never trust user-supplied hash metadata."""
+    if blob is None or blob.size != len(data) or blob.generation is None:
+        return False
+    existing = blob.download_as_bytes(if_generation_match=blob.generation, raw_download=True, start=0, end=len(data) - 1)
+    return len(existing) == len(data) and hmac.compare_digest(hashlib.sha256(existing).digest(), hashlib.sha256(data).digest())
+
+
+def seed_body_templates(db, bucket, *, directory, garment_ids):
+    """Publish five validated templates for explicit existing garments, without invalidating old renders.
+
+Preflight all local files, documents and existing objects before writing anything. Object
+writes are create-only; document updates replace only the template map and its timestamp.
+A repeated identical call performs no writes. Partial storage failures can be retried.
+"""
+    ids = list(dict.fromkeys(catalog_id(value) for value in garment_ids))
+    if not ids or len(ids) > 100:
+        raise ValueError("Choose between one and 100 explicit garment IDs.")
+    images = {key: normalized_png(Path(directory) / f"Pose1_Weight{index}.png")
+              for index, key in enumerate(BODY_TEMPLATE_IDS, start=1)}
+    if len({size for _, size in images.values()}) != 1:
+        raise ValueError("All five body templates must use the same image dimensions.")
+
+    plans, uploads = [], {}
+    for garment_id in ids:
+        reference = db.collection("garments").document(garment_id)
+        snapshot = reference.get()
+        if not snapshot.exists:
+            raise ValueError(f"Garment {garment_id} does not exist; seed its clothing reference first.")
+        garment = snapshot.to_dict()
+        prefix = f"garments/{garment_id}"
+        if (not isinstance(garment, dict) or garment.get("imagePath") != f"{prefix}/reference.png"
+                or garment.get("baseImagePath") != f"{prefix}/base.png"):
+            raise ValueError(f"Garment {garment_id} has noncanonical catalog paths; no images were published.")
+        legacy = bucket.get_blob(f"{prefix}/base.png")
+        if legacy is None:
+            raise ValueError(f"Garment {garment_id} is missing its original base image.")
+        reuse_middle = _identical_blob(legacy, images["weight-3"][0])
+        paths = {}
+        for key, (data, _) in images.items():
+            path = f"{prefix}/base.png" if key == "weight-3" and reuse_middle else f"{prefix}/body-bases/{key}.png"
+            paths[key] = path
+            if key == "weight-3" and reuse_middle:
+                continue
+            existing = bucket.get_blob(path)
+            if existing is None:
+                uploads[path] = data
+            elif not _identical_blob(existing, data):
+                raise ValueError(f"Catalog image {path} exists with different bytes; no object was overwritten.")
+        body_catalog_paths(garment_id, garment | {"bodyBaseImagePaths": paths}, "weight-3")
+        plans.append((garment_id, reference, paths, garment.get("bodyBaseImagePaths") != paths))
+
+    for path, data in uploads.items():
+        blob = bucket.blob(path)
+        blob.cache_control = "private, max-age=300"
+        blob.metadata = {}
+        blob.upload_from_string(data, content_type="image/png", if_generation_match=0)
+    changed = [plan for plan in plans if plan[3]]
+    if changed:
+        batch = db.batch()
+        timestamp = datetime.now(timezone.utc)
+        for _, reference, paths, _ in changed:
+            # update() replaces the map (rather than retaining obsolete nested keys) and
+            # refuses to recreate a garment deleted since preflight. updatedAt stays intact.
+            batch.update(reference, {"bodyBaseImagePaths": paths, "bodyTemplatesUpdatedAt": timestamp})
+        batch.commit()
+    return {"garments": [{"garmentId": garment_id, "bodyBaseImagePaths": paths, "updated": changed}
+                         for garment_id, _, paths, changed in plans],
+            "uploadedImages": len(uploads), "updatedGarments": len(changed),
+            "dimensions": list(next(iter(images.values()))[1])}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project", default=os.environ.get("FIREBASE_PROJECT_ID"))
@@ -170,6 +244,9 @@ def main(argv=None):
     seed.add_argument("--description", default="")
     seed.add_argument("--reference", type=Path, required=True)
     seed.add_argument("--base", type=Path, required=True)
+    bodies = sub.add_parser("seed-body-templates", help="Publish five Pose1_WeightN.png templates for explicit existing garments.")
+    bodies.add_argument("--directory", type=Path, required=True)
+    bodies.add_argument("garment_ids", nargs="+", type=catalog_id)
     cors = sub.add_parser("configure-cors", help="Replace the bucket's read-only browser CORS allowlist.")
     cors.add_argument("--origin", type=normalize_origin, action="append", required=True)
     args = parser.parse_args(argv)
@@ -180,6 +257,8 @@ def main(argv=None):
             if args.command == "seed-garment":
                 result = seed_garment(db, bucket, garment_id=args.id, name=args.name, brand=args.brand,
                                       description=args.description, reference=args.reference, base=args.base)
+            elif args.command == "seed-body-templates":
+                result = seed_body_templates(db, bucket, directory=args.directory, garment_ids=args.garment_ids)
             else:
                 result = configure_cors(bucket, args.origin)
         print(json.dumps({"project": args.project, "bucket": args.bucket, **result}, indent=2))

@@ -4,7 +4,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 root=Path(__file__).resolve().parent
 items=[
-    ('Fixed pose',root.parent/'ClothesSwap/ChatGPT Image Sep 26, 2026, 01_31_17 PM.png'),
+    ('Fixed pose',root.parent/'ClothesSwap/Pose1_Weight3.png'),
     ('Uploaded shirt',root.parent/'ClothesSwap/Screenshot 2026-09-26 125422.png'),
     ('Selected person + shirt',root/'tryon-results/TryOn_final.png'),
 ]
