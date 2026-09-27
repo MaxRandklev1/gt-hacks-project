@@ -165,6 +165,37 @@ class BodyTemplatePublicationTests(unittest.TestCase):
         self.assertEqual(self.db.documents, before)
         self.assertEqual(len(self.bucket.downloads) - downloads, 5)
 
+    def test_renamed_male_sources_preserve_the_same_idempotent_publication(self):
+        self.seed()
+        before = deepcopy(self.db.documents)
+        self.bucket.uploads.clear(); self.db.commits.clear()
+        for number in range(1, 6):
+            (self.directory / f"Pose1_Weight{number}.png").rename(
+                self.directory / f"Pose1_Weight{number}_Male.png")
+            # A separate template set must not affect resolution or the published hashes.
+            Image.new("RGB", (8, 8), "yellow").save(self.directory / f"Pose1_Weight{number}_Female.png")
+        result = self.seed()
+        self.assertEqual(result["uploadedImages"], 0)
+        self.assertEqual(result["updatedGarments"], 0)
+        self.assertEqual(self.bucket.uploads, [])
+        self.assertEqual(self.db.commits, [])
+        self.assertEqual(self.db.documents, before)
+
+    def test_original_filename_takes_precedence_over_different_male_copy(self):
+        for number in range(1, 6):
+            Image.new("RGB", (8, 8), "yellow").save(self.directory / f"Pose1_Weight{number}_Male.png")
+        result = self.seed()
+        for template, path in result["garments"][0]["bodyBaseImagePaths"].items():
+            self.assertEqual(self.bucket.objects[path], self.images[template])
+
+    def test_female_source_is_never_a_fallback_for_a_missing_original_template(self):
+        (self.directory / "Pose1_Weight5.png").rename(self.directory / "Pose1_Weight5_Female.png")
+        with self.assertRaises(ValueError):
+            self.seed()
+        self.assert_no_writes()
+        self.assertEqual(self.db.reads, [])
+        self.assertEqual(self.bucket.reads, [])
+
     def test_different_legacy_base_gets_separate_middle_without_overwriting_legacy(self):
         legacy = self.images["weight-1"]
         self.bucket.objects["garments/shirt/base.png"] = legacy

@@ -1,10 +1,14 @@
 """Arrange source photos and the unmodified final render for review."""
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont, ImageOps
+import sys
 
 root=Path(__file__).resolve().parent
+sys.path.insert(0, str(root.parent))
+from services.worker.body_templates import body_template_source
+
 items=[
-    ('Fixed pose',root.parent/'ClothesSwap/Pose1_Weight3.png'),
+    ('Fixed pose',body_template_source(root.parent/'ClothesSwap', 3)),
     ('Uploaded shirt',root.parent/'ClothesSwap/Screenshot 2026-09-26 125422.png'),
     ('Selected person + shirt',root/'tryon-results/TryOn_final.png'),
 ]

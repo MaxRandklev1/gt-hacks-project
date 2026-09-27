@@ -2,11 +2,15 @@
 import json
 from pathlib import Path
 import requests
+import sys
 
 root=Path(__file__).resolve().parent
+sys.path.insert(0, str(root.parent))
+from services.worker.body_templates import body_template_source
+
 folder=root.parent/'ClothesSwap'
 sources={
-    'tryon_pose_base.png':folder/'Pose1_Weight3.png',
+    'tryon_pose_base.png':body_template_source(folder, 3),
     'tryon_shirt_reference.png':folder/'Screenshot 2026-09-26 125422.png',
 }
 report={}

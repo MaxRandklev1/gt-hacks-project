@@ -19,10 +19,10 @@ from PIL import Image, ImageOps
 
 try:
     from .comfy import safe_id
-    from .body_templates import BODY_TEMPLATE_IDS, body_catalog_paths
+    from .body_templates import BODY_TEMPLATE_IDS, body_catalog_paths, body_template_source
 except ImportError:
     from comfy import safe_id
-    from body_templates import BODY_TEMPLATE_IDS, body_catalog_paths
+    from body_templates import BODY_TEMPLATE_IDS, body_catalog_paths, body_template_source
 
 
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
@@ -178,7 +178,7 @@ A repeated identical call performs no writes. Partial storage failures can be re
     ids = list(dict.fromkeys(catalog_id(value) for value in garment_ids))
     if not ids or len(ids) > 100:
         raise ValueError("Choose between one and 100 explicit garment IDs.")
-    images = {key: normalized_png(Path(directory) / f"Pose1_Weight{index}.png")
+    images = {key: normalized_png(body_template_source(directory, index))
               for index, key in enumerate(BODY_TEMPLATE_IDS, start=1)}
     if len({size for _, size in images.values()}) != 1:
         raise ValueError("All five body templates must use the same image dimensions.")
@@ -244,7 +244,7 @@ def main(argv=None):
     seed.add_argument("--description", default="")
     seed.add_argument("--reference", type=Path, required=True)
     seed.add_argument("--base", type=Path, required=True)
-    bodies = sub.add_parser("seed-body-templates", help="Publish five Pose1_WeightN.png templates for explicit existing garments.")
+    bodies = sub.add_parser("seed-body-templates", help="Publish the original five Pose1_WeightN.png (or renamed _Male.png) templates.")
     bodies.add_argument("--directory", type=Path, required=True)
     bodies.add_argument("garment_ids", nargs="+", type=catalog_id)
     cors = sub.add_parser("configure-cors", help="Replace the bucket's read-only browser CORS allowlist.")

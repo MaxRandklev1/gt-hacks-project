@@ -24,12 +24,13 @@ import numpy as np
 
 from services.worker.comfy import ComfyClient
 from services.worker.catalog import normalized_png
+from services.worker.body_templates import body_template_source
 from services.worker.compose import (alignment_score, base_regions, compose, covering_mask, edit_region, garment_mask,
                                      head_crop, lock_personal_base, resize_mask)
 from services.worker.parsing import HumanParser, group_mask
 
 GRAPH = ROOT / "comfy-identity/Qwen21_Personal_Base_2K.api.json"
-BASE = ROOT / "ClothesSwap/Pose1_Weight3.png"
+BASE = body_template_source(ROOT / "ClothesSwap", 3)
 STYLED = ROOT / ".local/firebase-worker/styled"
 
 
@@ -46,7 +47,7 @@ def main():
     parser.add_argument("--garments", nargs="+", required=True, help="Worker styled-cache keys or garment ids listed in --garment-map")
     parser.add_argument("--garment-map", type=Path, help="JSON {garment_id: styled_cache_key}")
     parser.add_argument("--base", type=Path, default=BASE,
-                        help="Pose source image; use garment cache variants rendered on this same body (default: Pose1_Weight3.png).")
+                        help="Pose source image; use matching garment cache variants (default: original Weight3, including its _Male rename).")
     parser.add_argument("--steps", type=int, default=24)
     parser.add_argument("--reuse", action="store_true", help="Re-composite saved raw personal bases without generating again.")
     args = parser.parse_args()

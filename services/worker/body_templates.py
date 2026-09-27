@@ -7,6 +7,7 @@ Reference: https://www.cdc.gov/bmi/adult-calculator/bmi-categories.html
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 try:
     from .comfy import safe_id
@@ -16,6 +17,19 @@ except ImportError:
 
 BODY_TEMPLATE_IDS = tuple(f"weight-{number}" for number in range(1, 6))
 BODY_TEMPLATE_POLICY_VERSION = "bmi-visual-v1"
+
+
+def body_template_source(directory, number):
+    """Resolve the original template set after its optional _Male filename rename.
+
+    The legacy name wins if both exist. Never auto-select the separate _Female set.
+    The caller still validates that the returned path is a usable local image.
+    """
+    if type(number) is not int or not 1 <= number <= len(BODY_TEMPLATE_IDS):
+        raise ValueError("Choose a body-template number between one and five.")
+    directory = Path(directory)
+    legacy = directory / f"Pose1_Weight{number}.png"
+    return legacy if legacy.is_file() else directory / f"Pose1_Weight{number}_Male.png"
 
 
 def select_body_template(height_cm, weight_kg):
