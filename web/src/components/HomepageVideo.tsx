@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { BrandMark } from './Icon';
 
 // Supply a hosted video URL when the product walkthrough is ready.
 const videoSource = import.meta.env.VITE_HOMEPAGE_VIDEO_URL?.trim();
@@ -9,7 +10,7 @@ export function HomepageVideo() {
     {videoSource && !unavailable
       ? <video src={videoSource} autoPlay muted loop playsInline controls preload="metadata" aria-label="How THREAD works" onError={() => setUnavailable(true)} />
       : <div className="homepage-video-placeholder">
-        <span className="video-placeholder-mark" aria-hidden="true">✳</span>
+        <span className="video-placeholder-mark" aria-hidden="true"><BrandMark /></span>
         <p className="eyebrow">THREAD IN ACTION</p>
         <h2>Your fitting room,<br />in motion.</h2>
         <p className="video-placeholder-caption">Video coming soon</p>

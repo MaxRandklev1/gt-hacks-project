@@ -7,7 +7,7 @@ import {
   type SessionUser, type UserProfile, type Job, type Garment, type Generation,
 } from './lib/client';
 import { parseGarmentCode, readPendingGarment, rememberGarment, clearPendingGarment } from './lib/qr';
-import { GoogleMark, Icon } from './components/Icon';
+import { BrandMark, GoogleMark, Icon } from './components/Icon';
 import { Scanner, type ScannerHandle } from './components/Scanner';
 import { GarmentCatalog } from './components/GarmentCatalog';
 import { SelfieCapture, type CapturedSelfie } from './components/SelfieCapture';
@@ -386,7 +386,7 @@ function App() {
   }
 
   return <div className="app-shell">
-    <header className="site-header"><button className="wordmark" aria-label="THREAD home" onClick={() => navigate(isMain ? 'scanner' : 'welcome')}>THREAD<span className="brand-asterisk">✳</span></button><span className="header-caption">YOUR FITTING ROOM.</span><div className="header-actions">{user && isMain && <><LooksMenu active={screen === 'gallery' || screen === 'detail'} filter={looksFilter} onSelect={openLooks} /><button className="avatar" aria-label="Your profile" onClick={() => navigate('account')}>{user?.photoURL ? <img src={user.photoURL} alt="" referrerPolicy="no-referrer" /> : <Icon name="user" size={18} />}</button></>}</div></header>
+    <header className="site-header"><button className="wordmark" aria-label="THREAD home" onClick={() => navigate(isMain ? 'scanner' : 'welcome')}>THREAD<BrandMark /></button><span className="header-caption">YOUR FITTING ROOM.</span><div className="header-actions">{user && isMain && <><LooksMenu active={screen === 'gallery' || screen === 'detail'} filter={looksFilter} onSelect={openLooks} /><button className="avatar" aria-label="Your profile" onClick={() => navigate('account')}>{user?.photoURL ? <img src={user.photoURL} alt="" referrerPolicy="no-referrer" /> : <Icon name="user" size={18} />}</button></>}</div></header>
     {error && <div className="global-message error-message" role="alert"><span>{error}</span><button onClick={() => setError('')} aria-label="Dismiss error"><Icon name="close" size={17} /></button></div>}
     {notice && <div className="global-message notice-message" role="status"><span>{notice}</span><button onClick={() => setNotice('')} aria-label="Dismiss message"><Icon name="close" size={17} /></button></div>}
     {isMain && preferencesError && <div className="global-message error-message" role="alert"><span>{preferencesError}</span><button onClick={() => setPreferencesRetry(value => value + 1)}>Reconnect</button></div>}
@@ -492,7 +492,7 @@ function App() {
       <p className="sr-only" role="status">{pieceNotice}</p>
     </main>
     {isMain && <nav className="mobile-nav" aria-label="Main navigation"><button className={screen === 'home' ? 'active' : ''} aria-current={screen === 'home' ? 'page' : undefined} onClick={() => navigate('home')}><Icon name="spark" size={21} /><span>For you</span></button><button className={['scanner', 'collection'].includes(screen) ? 'active' : ''} aria-current={['scanner', 'collection'].includes(screen) ? 'page' : undefined} onClick={openScanTab}><Icon name="scan" size={23} /><span>Scan</span></button><LooksMenu mobile active={screen === 'gallery' || screen === 'detail'} filter={looksFilter} onSelect={openLooks} /></nav>}
-    <footer className="site-footer"><span>THREAD<span className="brand-asterisk">✳</span></span></footer>
+    <footer className="site-footer"><span>THREAD<BrandMark /></span></footer>
   </div>;
 }
 
