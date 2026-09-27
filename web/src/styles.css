@@ -47,10 +47,12 @@
 @media(max-width:640px){.home-empty-look{min-height:260px;padding:25px;gap:17px}.home-empty-look h3{font-size:23px}}
 
 .tryon-result{display:flex;flex-direction:column;gap:22px;max-width:620px;margin:0 auto}
+.tryon-result-title{font-size:24px;line-height:1.25;letter-spacing:-.6px;overflow-wrap:anywhere}
 .tryon-result-photo{display:block;width:100%;padding:0;background:transparent;border-radius:8px}
 .tryon-result-image{display:block;width:100%;height:auto;max-height:calc(100svh - 255px);object-fit:contain;border-radius:8px}
 .tryon-result-photo .image-placeholder{min-height:280px;aspect-ratio:1}
-.tryon-result-next{min-height:52px;font-size:14px}
+.tryon-result-next{display:grid;grid-template-columns:20px minmax(0,1fr) 20px;align-items:center;gap:12px;min-height:52px;font-size:14px}
+.tryon-result-next>span{text-align:center;min-width:0}
 .tryon-result-status{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;min-height:360px;padding:24px;text-align:center}
 .tryon-result-status h1{font-size:32px;line-height:1.2;letter-spacing:-1px}
 .tryon-result-status p{font-size:13px;line-height:1.7;color:var(--muted);max-width:380px}

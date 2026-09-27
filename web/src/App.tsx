@@ -384,7 +384,7 @@ function App() {
 
       {screen === 'home' && <section className="tryon-result fade-in" aria-label="Your try-on">
         {resultImage ? <>
-          <h1 className="sr-only">Your latest look</h1>
+          <h1 className="tryon-result-title">{resultImage.garmentName}</h1>
           <button className="tryon-result-photo" aria-label={`Open your ${resultImage.garmentName} look`} onClick={() => openLook(resultImage)}>
             <ProtectedImage path={resultImage.imagePath} alt={`You wearing ${resultImage.garmentName}`} className="tryon-result-image" />
           </button>
@@ -396,7 +396,7 @@ function App() {
           <p>{result.job?.message || 'We’re creating your personalized try-on. Your image will appear here.'}</p>
           <ProgressBar value={result.job?.progress} label={result.job?.stage?.replaceAll('_', ' ') || 'Preparing your look'} />
         </div> : <div className="tryon-result-status"><Icon name="scan" size={34} /><h1>Your next look starts with a scan.</h1><p>Scan a garment’s QR code to see yourself wearing it.</p></div>}
-        <button className="button button-ink full-width tryon-result-next" onClick={() => navigate('scanner')}>Choose your next piece <Icon name="arrow" size={19} /></button>
+        <button className="button button-ink full-width tryon-result-next" onClick={() => navigate('scanner')}><Icon name="scan" size={19} /><span>Choose your next piece</span><Icon name="arrow" size={19} /></button>
       </section>}
 
       {screen === 'scanner' && <section className="piece-picker fade-in">
