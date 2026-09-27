@@ -23,8 +23,8 @@ function GarmentImage({ path, name }: { path: string; name: string }) {
   </div>;
 }
 
-export function GarmentCatalog({ onSelect, disabled = false }: {
-  onSelect(id: string): void; disabled?: boolean;
+export function GarmentCatalog({ onSelect, disabled = false, headingLevel: Heading = 'h2' }: {
+  onSelect(id: string): void; disabled?: boolean; headingLevel?: 'h1' | 'h2';
 }) {
   const [garments, setGarments] = useState<Garment[]>([]);
   const [loading, setLoading] = useState(true);
@@ -40,7 +40,7 @@ export function GarmentCatalog({ onSelect, disabled = false }: {
   }, [retry]);
 
   return <section id="garment-collection" className="garment-collection" aria-labelledby="collection-title" aria-busy={loading}>
-    <div className="collection-heading"><div><p className="eyebrow">NO QR CODE NEEDED</p><h2 id="collection-title">Choose from the collection.</h2><p>Select a piece to start your personalized try-on.</p></div>{!loading && !error && <span className="collection-count">{garments.length} pieces</span>}</div>
+    <div className="collection-heading"><div><p className="eyebrow">NO QR CODE NEEDED</p><Heading id="collection-title" tabIndex={-1}>Choose from the collection.</Heading><p>Select a piece to start your personalized try-on.</p></div>{!loading && !error && <span className="collection-count">{garments.length} pieces</span>}</div>
     {disabled && <p className="collection-note" role="status">Your current try-on is still processing. You can choose another piece when it finishes.</p>}
     {loading ? <div className="collection-state" role="status"><span className="spinner" /> Loading the collection…</div>
       : error ? <div className="collection-state"><p role="alert">{error}</p><button className="button button-outline" onClick={() => setRetry(value => value + 1)}>Try again <Icon name="retry" size={16} /></button></div>

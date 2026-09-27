@@ -7,7 +7,10 @@ type ScannerControls = { stop(): void };
 
 export type ScannerHandle = { start(): void };
 
-export function Scanner({ onDetected, onClose, ref }: { onDetected(value: string): void; onClose(): void; ref?: Ref<ScannerHandle> }) {
+export function Scanner({ onDetected, onClose, onChooseCollection, headingLevel: Heading = 'h2', ref }: {
+  onDetected(value: string): void; onClose?(): void; onChooseCollection?(): void;
+  headingLevel?: 'h1' | 'h2'; ref?: Ref<ScannerHandle>;
+}) {
   const video = useRef<HTMLVideoElement>(null);
   const stream = useRef<MediaStream | null>(null);
   const controls = useRef<ScannerControls | null>(null);
@@ -137,7 +140,7 @@ export function Scanner({ onDetected, onClose, ref }: { onDetected(value: string
   }
 
   return <section className="scanner-panel fade-in" aria-labelledby="scanner-title">
-    <div className="section-heading"><div><p className="eyebrow">HAVE A GARMENT TAG?</p><h2 id="scanner-title">Scan its QR code.</h2></div><button className="icon-button" onClick={onClose} aria-label="Close scanner"><Icon name="close" /></button></div>
+    <div className="section-heading"><div><p className="eyebrow">YOUR IN-STORE FITTING ROOM</p><Heading id="scanner-title" tabIndex={-1}>Scan its QR code.</Heading></div>{onClose && <button className="icon-button" onClick={onClose} aria-label="Close scanner"><Icon name="close" /></button>}</div>
     <div className={`camera-window ${active ? 'is-active' : ''}`}>
       <video ref={video} playsInline muted aria-label="Live QR scanner" />
       <div className="scan-corners" aria-hidden="true"><i /><i /><i /><i /></div>
@@ -146,7 +149,8 @@ export function Scanner({ onDetected, onClose, ref }: { onDetected(value: string
     </div>
     {error && <p className="error-message" role="alert">{error}</p>}
     <div className="scanner-alternatives"><button className="text-button" onClick={() => file.current?.click()}><Icon name="upload" size={17} /> Upload a QR image</button><span>No camera? No problem.</span><input ref={file} type="file" accept="image/*" hidden onChange={event => scanFile(event.target.files?.[0])} /></div>
-    <a className="catalog-return" href="#garment-collection"><Icon name="grid" size={16} /> No QR? Choose from the collection</a>
+    {!onChooseCollection && <a className="catalog-return" href="#garment-collection"><Icon name="grid" size={16} /> No QR? Choose from the collection</a>}
     <p className="microcopy">Your camera is used to read the code. Camera footage is not uploaded.</p>
+    {onChooseCollection && <div className="collection-backup"><p>No QR code available?</p><button type="button" className="button button-outline full-width" onClick={onChooseCollection}><Icon name="grid" size={17} /> Choose from the collection <Icon name="arrow" size={17} /></button></div>}
   </section>;
 }

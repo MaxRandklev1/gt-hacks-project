@@ -17,7 +17,7 @@ import { validateReferenceSelfie } from './lib/validation';
 import { onboardingProgress, replacementSetupScreen, readOnboardingChoices, saveOnboardingChoices, type OnboardingChoices } from './lib/onboarding';
 import './styles.css';
 
-type View = 'home' | 'scanner' | 'gallery' | 'detail' | 'account';
+type View = 'home' | 'scanner' | 'collection' | 'gallery' | 'detail' | 'account';
 type Screen = View | 'welcome' | 'measurements' | 'selfie' | 'preparing' | 'loading';
 
 function errorText(error: unknown) { return error instanceof Error ? error.message : 'Something went wrong. Please try again.'; }
@@ -70,6 +70,14 @@ function App() {
   const [jobsLoading, setJobsLoading] = useState(false);
   const [generations, setGenerations] = useState<Generation[]>([]);
   const [view, setView] = useState<View>('scanner');
+  const [compactPicker, setCompactPicker] = useState(() => window.matchMedia('(max-width: 820px)').matches);
+  useEffect(() => {
+    const query = window.matchMedia('(max-width: 820px)');
+    const update = () => setCompactPicker(query.matches);
+    update();
+    query.addEventListener('change', update);
+    return () => query.removeEventListener('change', update);
+  }, []);
   const scannerRef = useRef<ScannerHandle>(null);
   const [phase, setPhase] = useState<'measurements' | 'selfie' | null>(null);
   const [editingProfile, setEditingProfile] = useState(false);
@@ -189,8 +197,12 @@ function App() {
   const showGenerationProgress = requesting || activeJob || awaitingJob;
   const chosenGeneration = generations.find(item => item.id === selectedGeneration?.id) || selectedGeneration;
   const screen: Screen = authLoading ? 'loading' : !user ? 'welcome' : !setupLoaded ? 'loading' : editingProfile && phase ? phase : ready ? view : phase || (setup.screen === 'ready' ? view : setup.screen);
+  useEffect(() => {
+    if (screen === 'collection') document.getElementById('collection-title')?.focus();
+    else if (screen === 'scanner') document.getElementById('scanner-title')?.focus();
+  }, [screen]);
   const firstName = user?.displayName?.trim().split(/\s+/)[0] || 'there';
-  const isMain = ['home', 'scanner', 'gallery', 'detail', 'account'].includes(screen);
+  const isMain = ['home', 'scanner', 'collection', 'gallery', 'detail', 'account'].includes(screen);
   const [bodyStyle, setBodyStyle] = useState<'male' | 'female' | undefined>();
   useEffect(() => { setBodyStyle(profile?.bodyStyle); }, [profile?.bodyStyle]);
   const measurementValid = measurementsValid(measurements) && Boolean(bodyStyle);
@@ -368,9 +380,14 @@ function App() {
       {screen === 'home' && <div className="home-layout fade-in"><section className="home-primary"><div className="hello-line"><span className="status-dot" />YOUR FITTING ROOM IS READY</div><h1>Hey {firstName}.<br />Make it yours.</h1><p className="hero-description">Your next favorite piece is out there.<br />Let’s see it on you.</p><button className="scan-cta" onClick={() => navigate('scanner')}><span className="scan-cta-icon"><Icon name="scan" size={28} /></span><span><strong>{generations.length ? 'Choose your next piece' : 'Choose your first piece'}</strong><small>Browse the collection or scan a THREAD QR.</small></span><Icon name="arrow" size={23} /></button>{pendingGarment && <div className="pending-garment"><Icon name="scan" /><div><strong>{garmentLoading ? 'Finding your piece…' : garment?.name || 'Scanned piece'}</strong><p>{requesting ? 'Starting your try-on automatically…' : error ? 'We couldn’t start this try-on yet.' : 'Ready to enter your fitting room.'}</p>{error && <button className="text-button" onClick={() => retryGarment(pendingGarment)}>Try again <Icon name="retry" size={14} /></button>}</div></div>}{showGenerationProgress && <div className="job-card"><div className="job-card-heading"><span className="spinner" /><div><strong>{activeJob?.status === 'queued' ? 'Your piece is in line' : 'Your look is taking shape'}</strong><p>{activeJob?.message || 'We’re creating your personalized try-on. This takes a few seconds.'}</p></div></div><ProgressBar value={activeJob?.progress} label={activeJob?.stage?.replaceAll('_', ' ') || (requesting ? 'Starting your try-on' : 'Preparing your look')} /><button className="text-button" onClick={() => navigate('gallery')}>View your looks <Icon name="arrow" size={16} /></button></div>}{profile?.identity?.previewPath && <div className="your-look"><ProtectedImage path={profile.identity.previewPath} alt="Your look in the fitting room" className="your-look-image" /><div><strong>Your saved fitting-room look.</strong><p>Every piece you scan goes on this look. You can update it in your profile.</p><button className="text-button" onClick={() => navigate('account')}>Manage your look <Icon name="user" size={15} /></button></div></div>}</section><aside className="home-look"><div className="section-heading compact"><div><p className="eyebrow">{generations.length ? 'YOUR LATEST LOOK' : 'YOUR FIRST LOOK'}</p><h2>{generations.length ? 'Made for your mood.' : 'Start with a piece you love.'}</h2></div></div>{generations.length ? lookCard(generations[0], 0) : <div className="home-empty-look"><Icon name="grid" size={34} /><h3>Your first look starts here.</h3><p>Choose a garment from the collection or scan its THREAD QR to see it on you.</p><button className="button button-outline" onClick={() => navigate('scanner')}>Choose a piece <Icon name="arrow" size={17} /></button></div>}</aside></div>}
 
       {screen === 'scanner' && <section className="piece-picker fade-in">
-        <header className="piece-picker-heading"><div><p className="eyebrow">YOUR NEXT FIND</p><h1>Pick your next piece.<br />See it on you.</h1><p>Browse the collection or scan a garment’s tag. Either way, your next look starts here.</p></div><a className="button button-outline" href="#garment-scanner"><Icon name="scan" size={18} /> Have a QR code? Scan it</a></header>
-        <GarmentCatalog key={user?.uid} onSelect={scan} disabled={Boolean(showGenerationProgress)} />
-        <div id="garment-scanner" className="piece-picker-camera"><Scanner ref={scannerRef} onDetected={scan} onClose={() => navigate('home')} /></div>
+        {!compactPicker && <header className="piece-picker-heading"><div><p className="eyebrow">YOUR NEXT FIND</p><h1>Pick your next piece.<br />See it on you.</h1><p>Browse the collection or scan a garment’s tag. Either way, your next look starts here.</p></div></header>}
+        <div id="garment-scanner" className="piece-picker-camera"><Scanner ref={scannerRef} onDetected={scan} onClose={compactPicker ? undefined : () => navigate('home')} onChooseCollection={compactPicker ? () => navigate('collection') : undefined} headingLevel={compactPicker ? 'h1' : 'h2'} /></div>
+        {!compactPicker && <GarmentCatalog key={user?.uid} onSelect={scan} disabled={Boolean(showGenerationProgress)} />}
+      </section>}
+
+      {screen === 'collection' && <section className="collection-page fade-in">
+        <button className="text-button back-link" onClick={() => navigate('scanner')}><Icon name="back" size={17} /> Back to scanner</button>
+        <GarmentCatalog key={user?.uid} onSelect={scan} disabled={Boolean(showGenerationProgress)} headingLevel="h1" />
       </section>}
 
       {screen === 'gallery' && <section className="gallery-page fade-in"><div className="gallery-heading"><div><p className="eyebrow">YOUR PERSONAL EDIT</p><h1>Your looks<span className="count-sup">{generations.length.toString().padStart(2, '0')}</span></h1><p>Every piece. Every possibility. All in one place.</p></div><button className="button button-ink" onClick={() => navigate('scanner')}><Icon name="scan" size={18} /> Choose a piece</button></div>{generations.length ? <div className="gallery-grid">{generations.map(lookCard)}</div> : <div className="empty-gallery"><div className="empty-look-frame"><Icon name="grid" size={34} /></div><h2>A little empty.<br />A lot of possibility.</h2><p>Choose your first piece to start building your personal collection of looks.</p><button className="button button-ink" onClick={() => navigate('scanner')}>Find your first look <Icon name="arrow" /></button></div>}</section>}
@@ -379,7 +396,7 @@ function App() {
 
       {screen === 'account' && <section className="account-page fade-in"><p className="eyebrow">THE PERSON BEHIND THE LOOKS</p><h1>Your profile.</h1><div className="account-card"><div className="account-identity"><span className="avatar large-avatar"><Icon name="user" size={26} /></span><div><h2>{user?.displayName || 'Your account'}</h2><p>{user?.email}</p></div><span className="status-pill">{ready ? 'Ready to try on' : 'Setting up'}</span></div><dl className="account-measurements"><div><dt>Height</dt><dd>{formatHeight(profile?.heightCm, profile?.measurementSystem || 'us')}</dd></div><div><dt>Weight</dt><dd>{formatWeight(profile?.weightKg, profile?.measurementSystem || 'us')}</dd></div><div><dt>Your looks</dt><dd>{generations.length}</dd></div></dl><p className="account-note">{accountBodyNote}</p><button className="text-button" onClick={updateDetailsAndLook}>Update details and rebuild look <Icon name="arrow" size={16} /></button><button className="text-button" onClick={retakeSelfie}>Retake your selfie <Icon name="arrow" size={16} /></button></div><button className="text-button logout-button" onClick={logout} disabled={busy}><Icon name="logout" size={17} />Sign out</button></section>}
     </main>
-    {isMain && <nav className="mobile-nav" aria-label="Main navigation"><button className={screen === 'home' ? 'active' : ''} aria-current={screen === 'home' ? 'page' : undefined} onClick={() => navigate('home')}><Icon name="spark" size={21} /><span>For you</span></button><button className={screen === 'scanner' ? 'active' : ''} aria-current={screen === 'scanner' ? 'page' : undefined} onClick={openScanTab}><Icon name="scan" size={23} /><span>Scan</span></button><button className={screen === 'gallery' || screen === 'detail' ? 'active' : ''} aria-current={screen === 'gallery' || screen === 'detail' ? 'page' : undefined} onClick={() => navigate('gallery')}><Icon name="grid" size={20} /><span>Your looks</span></button></nav>}
+    {isMain && <nav className="mobile-nav" aria-label="Main navigation"><button className={screen === 'home' ? 'active' : ''} aria-current={screen === 'home' ? 'page' : undefined} onClick={() => navigate('home')}><Icon name="spark" size={21} /><span>For you</span></button><button className={['scanner', 'collection'].includes(screen) ? 'active' : ''} aria-current={['scanner', 'collection'].includes(screen) ? 'page' : undefined} onClick={openScanTab}><Icon name="scan" size={23} /><span>Scan</span></button><button className={screen === 'gallery' || screen === 'detail' ? 'active' : ''} aria-current={screen === 'gallery' || screen === 'detail' ? 'page' : undefined} onClick={() => navigate('gallery')}><Icon name="grid" size={20} /><span>Your looks</span></button></nav>}
     <footer className="site-footer"><span>THREAD<span className="brand-asterisk">✳</span></span></footer>
   </div>;
 }
