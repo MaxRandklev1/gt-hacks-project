@@ -19,7 +19,6 @@ export function Scanner({ onDetected, onClose, ref }: { onDetected(value: string
   const [active, setActive] = useState(false);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState('');
-  const [code, setCode] = useState('');
   const file = useRef<HTMLInputElement>(null);
   onDetectedRef.current = onDetected;
 
@@ -59,7 +58,7 @@ export function Scanner({ onDetected, onClose, ref }: { onDetected(value: string
     setError('');
     setStarting(true);
     try {
-      if (!navigator.mediaDevices?.getUserMedia) throw new Error('Camera access needs HTTPS and a supported browser. You can also upload a QR image below.');
+      if (!navigator.mediaDevices?.getUserMedia) throw new Error('Camera access needs HTTPS and a supported browser. You can also upload a QR image or choose a piece from the collection.');
       const DetectorClass = (window as unknown as { BarcodeDetector?: DetectorConstructor }).BarcodeDetector;
       if (DetectorClass) {
         let detector: Detector | null = null;
@@ -138,7 +137,7 @@ export function Scanner({ onDetected, onClose, ref }: { onDetected(value: string
   }
 
   return <section className="scanner-panel fade-in" aria-labelledby="scanner-title">
-    <div className="section-heading"><div><p className="eyebrow">YOUR NEXT FIND</p><h2 id="scanner-title">Meet it. Scan it.<br />See it on you.</h2></div><button className="icon-button" onClick={onClose} aria-label="Close scanner"><Icon name="close" /></button></div>
+    <div className="section-heading"><div><p className="eyebrow">HAVE A GARMENT TAG?</p><h2 id="scanner-title">Scan its QR code.</h2></div><button className="icon-button" onClick={onClose} aria-label="Close scanner"><Icon name="close" /></button></div>
     <div className={`camera-window ${active ? 'is-active' : ''}`}>
       <video ref={video} playsInline muted aria-label="Live QR scanner" />
       <div className="scan-corners" aria-hidden="true"><i /><i /><i /><i /></div>
@@ -147,7 +146,7 @@ export function Scanner({ onDetected, onClose, ref }: { onDetected(value: string
     </div>
     {error && <p className="error-message" role="alert">{error}</p>}
     <div className="scanner-alternatives"><button className="text-button" onClick={() => file.current?.click()}><Icon name="upload" size={17} /> Upload a QR image</button><span>No camera? No problem.</span><input ref={file} type="file" accept="image/*" hidden onChange={event => scanFile(event.target.files?.[0])} /></div>
-    <form className="code-form" onSubmit={event => { event.preventDefault(); accept(code); }}><label htmlFor="garment-code">Or enter the garment code</label><div><input id="garment-code" value={code} onChange={event => setCode(event.target.value)} placeholder="e.g. THREAD-001" autoComplete="off" autoCapitalize="none" /><button type="submit" className="button button-ink" disabled={!code.trim()} aria-label="Find garment"><Icon name="arrow" /></button></div></form>
+    <a className="catalog-return" href="#garment-collection"><Icon name="grid" size={16} /> No QR? Choose from the collection</a>
     <p className="microcopy">Your camera is used to read the code. Camera footage is not uploaded.</p>
   </section>;
 }

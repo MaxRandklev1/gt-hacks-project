@@ -1,6 +1,6 @@
 # THREAD app architecture
 
-The implemented app is deployed at **[https://gt-hacks-thread-2026.firebaseapp.com](https://gt-hacks-thread-2026.firebaseapp.com)**. The [printable demo tag](tags/demo-shirt.html) opens `https://gt-hacks-thread-2026.firebaseapp.com/g/demo-shirt`. The app queues a try-on for an existing ready account; a new account keeps that item pending through Google sign-in, onboarding and training. Onboarding requires height/weight and one selfie. Users can take it with the camera or choose a recent JPG, PNG or WebP. A signed-in scanner homepage supports the phone camera, a QR image upload, and manual item-code entry. Camera access begins from a tap and requires HTTPS on a real phone.
+The implemented app is deployed at **[https://gt-hacks-thread-2026.firebaseapp.com](https://gt-hacks-thread-2026.firebaseapp.com)**. The [printable demo tag](tags/demo-shirt.html) opens `https://gt-hacks-thread-2026.firebaseapp.com/g/demo-shirt`. The app queues a try-on for an existing ready account; a new account keeps that item pending through Google sign-in, onboarding and training. Onboarding requires height/weight and one selfie. Users can take it with the camera or choose a recent JPG, PNG or WebP. The signed-in piece picker shows a photo inventory of active garments, alongside the phone camera and QR image upload. Choosing a garment starts the same account-scoped try-on as scanning its printed tag; a camera or typed garment code is not required. Camera access begins from a tap and requires HTTPS on a real phone.
 
 Measurements default to US units: feet/inches for height and pounds for weight. Users can choose metric. The app stores `heightCm`, `weightKg` and the `measurementSystem` preference (`us` or `metric`). New onboarding computes BMI from those metric values to select one of five supplied body templates. This selects an approximate visual body; it does not measure physical clothing fit. See [template ranges and rollout](BODY_TEMPLATES.md).
 
@@ -96,3 +96,9 @@ After that reset, a fresh version-3 account completed training in **291.38 secon
 `pnpm test` runs the JavaScript suite; rules cases require the configured local emulators. `pnpm test:rules` starts isolated Firestore and Storage emulators (Java 21 required) for the rules suite. The Python test commands are in the [worker guide](../services/worker/README.md).
 
 With no web configuration, the UI offers an explicitly labeled design preview. Preview actions never create an account or pretend to train/upload. Local Firebase emulator mode must be explicitly enabled with `VITE_USE_FIREBASE_EMULATORS=true` and is blocked on remote domains.
+
+## Garment inventory
+
+The piece picker lists authenticated Firestore `garments` with `active == true`, orders numbered THREAD items naturally, then shows other active items. It uses the existing try-on request path and per-account queue lock. Loading, empty, retry, unavailable-photo, and in-progress states are explicit; selecting another item is disabled while a try-on is in progress. Catalog images are authenticated Storage blob reads, not public download-token URLs.
+
+Cards prefer `thumbnailPath` and fall back to the reference `imagePath`. Prepare lightweight thumbnails with `services/worker/.venv/Scripts/python.exe scripts/prepare-catalog-thumbnails.py --help`; the script defaults to a dry run. Publishing adds content-addressed, metadata-stripped images and updates only `thumbnailPath`, leaving original references, presets, and printed destinations intact.

@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut as firebaseSignOut, type User } from 'firebase/auth';
-import { getFirestore, doc, collection, onSnapshot, query, where, orderBy, limit, getDoc, runTransaction, serverTimestamp, connectFirestoreEmulator, Timestamp } from 'firebase/firestore';
+import { getFirestore, doc, collection, onSnapshot, query, where, orderBy, limit, getDoc, getDocs, runTransaction, serverTimestamp, connectFirestoreEmulator, Timestamp } from 'firebase/firestore';
 import { connectAuthEmulator } from 'firebase/auth';
 import { getStorage, ref, uploadBytesResumable, getBlob, connectStorageEmulator } from 'firebase/storage';
 import { CONSENT_VERSION, validateMeasurements, validateReferenceSelfie } from './validation';
@@ -133,6 +133,18 @@ export async function getGarment(id: string): Promise<Garment | null> {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/.test(id)) throw new Error('Invalid item code.');
   const snap = await getDoc(doc(services().db, 'garments', id));
   return snap.exists() && snap.data().active ? { ...snap.data(), id: snap.id } as Garment : null;
+}
+export async function listActiveGarments(): Promise<Garment[]> {
+  const { db, user } = signedIn();
+  const snap = await getDocs(query(collection(db, 'garments'), where('active', '==', true)));
+  assertAccount(user.uid);
+  return snap.docs.map(item => ({ ...item.data(), id: item.id }) as Garment).sort((a, b) => {
+    const aNumbered = /^thread-\d+$/.test(a.id);
+    const bNumbered = /^thread-\d+$/.test(b.id);
+    if (aNumbered !== bNumbered) return aNumbered ? -1 : 1;
+    if (aNumbered) return a.id.localeCompare(b.id, 'en', { numeric: true });
+    return a.name.localeCompare(b.name, 'en', { numeric: true }) || a.id.localeCompare(b.id, 'en', { numeric: true });
+  });
 }
 export async function getPrivateImage(path: string) {
   const { storage, user } = signedIn();

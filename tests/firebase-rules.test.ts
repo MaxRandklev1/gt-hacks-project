@@ -166,6 +166,27 @@ describe('Firestore ownership and protected fields', () => {
   });
 });
 
+describe('Active garment inventory', () => {
+  it('allows authenticated active-filtered reads and excludes inactive or unfinished catalog items', async () => {
+    await seed({
+      'garments/thread-1': { active: true, name: 'THREAD 1' },
+      'garments/demo-shirt': { active: true, name: 'Demo shirt' },
+      'garments/inactive': { active: false, name: 'Inactive' },
+      'garments/draft': { name: 'Draft' },
+    });
+    const snapshot = await assertSucceeds(dbFor().collection('garments').where('active', '==', true).get());
+    expect(snapshot.docs.map(item => item.id).sort()).toEqual(['demo-shirt', 'thread-1']);
+  });
+
+  it('denies unrestricted catalog queries and all anonymous catalog reads', async () => {
+    await seed({ 'garments/thread-1': { active: true, name: 'THREAD 1' } });
+    await assertFails(dbFor().collection('garments').get());
+    const anonymous = env.unauthenticatedContext().firestore();
+    await assertFails(anonymous.collection('garments').where('active', '==', true).get());
+    await assertFails(anonymous.doc('garments/thread-1').get());
+  });
+});
+
 describe('Training requests and the per-user queue lock', () => {
   beforeEach(async () => { await seedProfile(); });
 

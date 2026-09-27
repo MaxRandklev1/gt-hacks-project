@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   auth: { currentUser: null as { uid: string } | null },
   listener: undefined as undefined | ((user: { uid: string } | null) => void),
-  redirect: vi.fn(), listen: vi.fn(), transaction: vi.fn(), getDoc: vi.fn(), upload: vi.fn(),
+  redirect: vi.fn(), listen: vi.fn(), transaction: vi.fn(), getDoc: vi.fn(), getDocs: vi.fn(), upload: vi.fn(),
 }));
 vi.mock('firebase/app', () => ({ initializeApp: () => ({}) }));
 vi.mock('firebase/auth', () => ({
@@ -14,7 +14,7 @@ vi.mock('firebase/auth', () => ({
 vi.mock('firebase/firestore', () => ({
   getFirestore: () => ({}), doc: (_: unknown, ...parts: string[]) => parts.length ? { path: parts.join('/'), id: parts.at(-1) } : { path: 'jobs/new-job', id: 'new-job' }, collection: vi.fn(),
   onSnapshot: vi.fn(), query: vi.fn(), where: vi.fn(), orderBy: vi.fn(), limit: vi.fn(),
-  getDoc: mocks.getDoc, runTransaction: mocks.transaction, serverTimestamp: () => 'timestamp', connectFirestoreEmulator: vi.fn(),
+  getDoc: mocks.getDoc, getDocs: mocks.getDocs, runTransaction: mocks.transaction, serverTimestamp: () => 'timestamp', connectFirestoreEmulator: vi.fn(),
   Timestamp: { fromMillis: (value: number) => ({ captureMillis: value }) },
 }));
 vi.mock('firebase/storage', () => ({
@@ -90,6 +90,31 @@ describe('Authentication return and account boundaries', () => {
     garment.resolve({ exists: () => true, data: () => ({ active: true, name: 'Tee' }), id: 'tee' });
     await expect(request).rejects.toThrow(/account changed/i);
     expect(mocks.transaction).not.toHaveBeenCalled();
+  });
+
+  it('requires sign-in before listing the garment inventory', async () => {
+    const { listActiveGarments } = await import('../web/src/lib/client');
+    await expect(listActiveGarments()).rejects.toThrow(/sign in/i);
+    expect(mocks.getDocs).not.toHaveBeenCalled();
+  });
+
+  it('orders numbered THREAD garments naturally, keeps other active items, and uses document IDs', async () => {
+    mocks.auth.currentUser = userA;
+    mocks.getDocs.mockResolvedValue({ docs: ['demo-shirt', 'thread-10', 'thread-2', 'thread-1'].map(id => ({
+      id, data: () => ({ id: 'untrusted-field-id', name: id, active: true, imagePath: `garments/${id}/reference.png` }),
+    })) });
+    const { listActiveGarments } = await import('../web/src/lib/client');
+    expect((await listActiveGarments()).map(item => item.id)).toEqual(['thread-1', 'thread-2', 'thread-10', 'demo-shirt']);
+  });
+
+  it('rejects an inventory response when the account changes before it arrives', async () => {
+    const inventory = deferred<unknown>(); mocks.getDocs.mockReturnValue(inventory.promise);
+    mocks.auth.currentUser = userA;
+    const { listActiveGarments } = await import('../web/src/lib/client');
+    const request = listActiveGarments();
+    mocks.auth.currentUser = userB;
+    inventory.resolve({ docs: [] });
+    await expect(request).rejects.toThrow(/account changed/i);
   });
 
   function imagePreparation() {
