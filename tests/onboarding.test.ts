@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { onboardingProgress, savedMeasurementsValid, needsPersonalLookReview, readOnboardingChoices, saveOnboardingChoices } from '../web/src/lib/onboarding';
+import { onboardingProgress, replacementSetupScreen, savedMeasurementsValid, needsPersonalLookReview, readOnboardingChoices, saveOnboardingChoices } from '../web/src/lib/onboarding';
 import type { Job, UserProfile } from '../web/src/lib/client';
 
 const measurements = { heightCm: 178, weightKg: 70, measurementSystem: 'us' as const, bodyStyle: 'male' as const };
@@ -103,5 +103,19 @@ describe('Body style choice', () => {
     const { bodyStyle: _omitted, ...withoutStyle } = measurements;
     expect(savedMeasurementsValid(withoutStyle)).toBe(false);
     expect(savedMeasurementsValid({ ...measurements, bodyStyle: 'other' as never })).toBe(false);
+  });
+  it('keeps an existing look usable without a body choice, but collects it before a retake', () => {
+    const { bodyStyle: _omitted, ...oldMeasurements } = measurements;
+    const profile: UserProfile = { ...oldMeasurements, identity: { status: 'ready', mode: 'personal_base', version: 'old-look' } };
+    expect(onboardingProgress(profile, []).ready).toBe(true);
+    expect(onboardingProgress(profile, []).screen).toBe('ready');
+    expect(replacementSetupScreen(profile)).toBe('measurements');
+  });
+  it.each(['male', 'female'] as const)('lets a %s account with complete details retake directly', bodyStyle => {
+    expect(replacementSetupScreen({ ...measurements, bodyStyle, identity: { status: 'ready', version: 'saved-look' } })).toBe('selfie');
+  });
+  it('sends incomplete new accounts to details before a replacement selfie', () => {
+    expect(replacementSetupScreen(null)).toBe('measurements');
+    expect(replacementSetupScreen({ bodyStyle: 'female' })).toBe('measurements');
   });
 });

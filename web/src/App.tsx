@@ -12,7 +12,7 @@ import { SelfieCapture, type CapturedSelfie } from './components/SelfieCapture';
 import { EnrollmentProgress } from './components/EnrollmentProgress';
 import { createMeasurements, editMeasurement, formatHeight, formatWeight, measurementsValid, switchMeasurementSystem } from './lib/measurements';
 import { validateReferenceSelfie } from './lib/validation';
-import { onboardingProgress, needsPersonalLookReview, readOnboardingChoices, saveOnboardingChoices, type OnboardingChoices } from './lib/onboarding';
+import { onboardingProgress, replacementSetupScreen, needsPersonalLookReview, readOnboardingChoices, saveOnboardingChoices, type OnboardingChoices } from './lib/onboarding';
 import './styles.css';
 
 type View = 'home' | 'scanner' | 'gallery' | 'detail' | 'account';
@@ -111,7 +111,7 @@ function App() {
       setUser(next); setAuthLoading(false); setProfileLoading(Boolean(next)); setJobsLoading(Boolean(next));
       setAccountError(''); setError(''); setNotice('');
       setProfile(null); setJobs([]); setGenerations([]); setSelectedGeneration(null);
-      setConsent(false); setMeasurements(createMeasurements()); setSelfie(null);
+      setConsent(false); setMeasurements(createMeasurements()); setBodyStyle(undefined); setSelfie(null);
       setSubmittedSelfieUrl(undefined);
       setOnboardingChoices(next ? readOnboardingChoices(next.uid) : {});
       setEditingProfile(false); setPhase(null); setEnrollmentRequestId(undefined);
@@ -257,7 +257,7 @@ function App() {
     finally { if (sessionEpoch.current === epoch) setUploading(false); }
   }
   function retakeSelfie() {
-    setEditingProfile(true); setPhase('selfie'); setSelfie(null); setConsent(false); setEnrollmentRequestId(undefined); setError('');
+    setEditingProfile(true); setPhase(replacementSetupScreen(profile)); setSelfie(null); setConsent(false); setEnrollmentRequestId(undefined); setError('');
   }
   function updateDetailsAndLook() {
     if (preview) { setPreviewScreen('measurements'); return; }
@@ -339,7 +339,7 @@ function App() {
         </aside>
         <section className="onboarding-card">
           {screen === 'measurements' && <>
-            <div className="step-kicker">STEP 01 <span>/ 03</span></div><h2>First, a little<br />about you.</h2><p className="section-description">Just two details to make your profile yours.</p>
+            <div className="step-kicker">STEP 01 <span>/ 03</span></div><h2>First, a little<br />about you.</h2><p className="section-description">Choose a body style and add your height and weight.</p>
             <div className="body-style" role="group" aria-label="Body style"><span className="body-style-label">Body style</span><div className="measurement-system"><button type="button" aria-pressed={bodyStyle === 'male'} onClick={() => setBodyStyle('male')}>Male</button><button type="button" aria-pressed={bodyStyle === 'female'} onClick={() => setBodyStyle('female')}>Female</button></div></div><div className="measurement-system" role="group" aria-label="Measurement units"><button type="button" aria-pressed={measurements.system === 'us'} onClick={() => setMeasurements(current => switchMeasurementSystem(current, 'us'))}>US <span>ft / lb</span></button><button type="button" aria-pressed={measurements.system === 'metric'} onClick={() => setMeasurements(current => switchMeasurementSystem(current, 'metric'))}>Metric <span>cm / kg</span></button></div>
             <form onSubmit={event => { event.preventDefault(); void continueMeasurements(); }}>
               {measurements.system === 'us' ? <div className="measurement-fields us-measurements">

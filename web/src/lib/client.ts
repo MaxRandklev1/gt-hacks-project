@@ -8,7 +8,9 @@ import { CONSENT_VERSION, validateMeasurements, validateReferenceSelfie } from '
 export type SessionUser = Pick<User, 'uid' | 'displayName' | 'email' | 'photoURL'>;
 export type PhotoSelection = { index: number; selected: boolean; score: number; reason: string };
 export type BodyTemplateSelection = {
-  id: 'weight-1' | 'weight-2' | 'weight-3' | 'weight-4' | 'weight-5';
+  id: 'weight-1' | 'weight-2' | 'weight-3' | 'weight-4' | 'weight-5'
+    | 'female-weight-1' | 'female-weight-2' | 'female-weight-3' | 'female-weight-4' | 'female-weight-5';
+  bodyStyle?: 'male' | 'female';
   bmi: number; heightCm: number; weightKg: number; policyVersion: 'bmi-visual-v1' | 'bmi-visual-v2';
 };
 export type UserProfile = {

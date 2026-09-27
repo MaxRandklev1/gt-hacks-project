@@ -6,6 +6,11 @@ export function savedMeasurementsValid(profile: UserProfile | null) {
   try { validateMeasurements(profile.heightCm!, profile.weightKg!); return true; } catch { return false; }
 }
 
+/** A saved look remains usable, but rebuilding requires all current setup choices. */
+export function replacementSetupScreen(profile: UserProfile | null): 'measurements' | 'selfie' {
+  return savedMeasurementsValid(profile) ? 'selfie' : 'measurements';
+}
+
 export type OnboardingChoices = { pendingLookReview?: string; keptPreviousEnrollmentId?: string };
 const choicesKey = (uid: string) => `thread:onboarding:${uid}`;
 export function readOnboardingChoices(uid: string, storage?: Pick<Storage, 'getItem'>): OnboardingChoices {
