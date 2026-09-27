@@ -23,6 +23,7 @@ The [BMI calculation and thresholds 18.5, 25 and 30](https://www.cdc.gov/bmi/adu
 - The server chooses the template. Browser requests cannot submit a template ID, alternative file path, or model setting.
 - The identity and private manifest store `bodyTemplate: {id, bmi, heightCm, weightKg, policyVersion: "bmi-visual-v1"}` when onboarding completes.
 - Each garment render uses the same selected pose source as the personal base. All active garments must resolve to one pose hash for that selection, so onboarding still generates one personal base.
+- Garment alignment allows collars and hems to cover the template's exposed neck or pants. It requires at least half of each original face and lower-body region to remain visible, and both visible regions must independently pass the 0.85 overlap threshold. Versioned mask caches recompute these checks on the CPU without rerendering clothing. Personal-base alignment checks remain unchanged.
 - Every scan uses the saved identity's template snapshot. Editing profile measurements alone cannot composite a differently shaped garment onto the old body. **Update details and rebuild look** applies new measurements through the existing single-selfie flow.
 - Existing identities without a body-template snapshot retain their original pose and cached garments until rebuilt.
 - Version A's face pipeline stays at 24 steps, BFS strength 0.65, a 0.35 MP selfie reference, neutral expression and no close-up redraw. Output remains 1024 plus 2K on the fast path.

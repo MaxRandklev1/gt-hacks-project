@@ -92,7 +92,7 @@ def main():
             tee = group_mask(state["base_labels"], "garment")
             skin = group_mask(labels, "face") | group_mask(labels, "arms")
             garments[garment] = {"r1024": render_1024, "r2k": render_2k, "mask": mask, "uncovered": tee & ~mask, "skin": skin}
-            score = alignment_score(state["base_labels"], labels)
+            score = alignment_score(state["base_labels"], labels, garment_occlusion=mask)
             report["garments"][garment] = {"alignment": round(score, 3), "uncoveredPixels": int((tee & ~mask).sum())}
             overlay(render_1024, mask, (255, 0, 160)).save(out / f"garment_{garment}_mask.png")
             print("garment", garment, "alignment", round(score, 3), flush=True)

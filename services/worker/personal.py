@@ -33,7 +33,8 @@ except ImportError:
 
 
 PERSONAL_STEPS = 24
-MIN_ALIGNMENT = 0.85  # Lower-body + face IoU against the pose base.
+MIN_ALIGNMENT = 0.85  # Each visible pose anchor for garments; original lower-body IoU for personal bases.
+GARMENT_MASK_VERSION = 2  # Recompute masks/scores after the bounded collar/hem-occlusion update.
 MAX_ASSET_BYTES = 40 * 1024 * 1024
 HEX = re.compile(r"[0-9a-f]{64}")
 
@@ -137,12 +138,12 @@ class PersonalBaseMixin:
 
     def garment_masks(self, styled_key, outputs, base_key):
         """Garment/uncovered/model-skin masks for a cached render, computed once on the CPU."""
-        path = outputs[0].parent / f"masks-{base_key}.npz"
+        path = outputs[0].parent / f"masks-v{GARMENT_MASK_VERSION}-{base_key}.npz"
         if not path.is_file():
             pose = self.pose(base_key)
             labels = self.human().parse(Image.open(outputs[0]).convert("RGB"))
             garment = garment_mask(labels, base_regions(pose["labels"]))
-            score = alignment_score(pose["labels"], labels)
+            score = alignment_score(pose["labels"], labels, garment_occlusion=garment)
             tee = group_mask(pose["labels"], "garment")
             skin = group_mask(labels, "face") | group_mask(labels, "arms")
             buffer = io.BytesIO()

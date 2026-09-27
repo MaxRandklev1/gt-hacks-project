@@ -110,16 +110,44 @@ def garment_mask(labels, regions):
     return _fill_holes(garment) & ~head & ~arms & ~lower
 
 
-def alignment_score(a_labels, b_labels, include_face=True):
+def alignment_score(a_labels, b_labels, include_face=True, garment_occlusion=None):
     """IoU of pose-defining regions (lower body + face) between two renders of the same pose.
 
     Arms are excluded: long sleeves legitimately cover them in garment renders.
+    The explicit garment mask permits collars/hems to hide expected pose pixels. That
+    mode requires at least half of BOTH original anchors to remain visible and scores
+    face and lower body separately, so a large pants region cannot hide a shifted face.
+    This is a bounded parsing heuristic, not proof of identical pose. Personal-base
+    checks (include_face=False) deliberately keep their original lower-body-only IoU.
     """
-    def pose(labels):
+    occlusion = None
+    if garment_occlusion is not None and include_face:
+        occlusion = np.asarray(garment_occlusion, dtype=bool)
+        if (a_labels.ndim != 2 or b_labels.ndim != 2 or a_labels.shape != b_labels.shape
+                or occlusion.shape != a_labels.shape or occlusion.ndim != 2):
+            raise ValueError("Garment alignment masks must share one image shape.")
+    def parts(labels):
         faces = sorted(_components(group_mask(labels, "face")), key=lambda item: -item[1])
         real_face = faces[0][0] if faces and include_face else np.zeros(labels.shape, bool)  # Not printed faces.
-        return np.isin(labels, [LABELS.index(n) for n in ("pants", "skirt", "left_leg", "right_leg")]) | real_face
-    a, b = pose(a_labels), pose(b_labels)
+        lower = np.isin(labels, [LABELS.index(n) for n in ("pants", "skirt", "left_leg", "right_leg")])
+        return real_face, lower
+    a_face, a_lower = parts(a_labels)
+    b_face, b_lower = parts(b_labels)
+    if occlusion is not None:
+        # A garment cannot simultaneously be a visible pose anchor. Refuse a malformed
+        # mask rather than allowing it to erase evidence of a moved face or lower body.
+        if (occlusion & (b_face | b_lower)).any():
+            return 0.0
+        scores = []
+        for expected, visible in ((a_face, b_face), (a_lower, b_lower)):
+            area = int(expected.sum())
+            remaining = expected & ~occlusion
+            if not area or not visible.any() or 2 * int(remaining.sum()) < area:
+                return 0.0
+            union = int((remaining | visible).sum())
+            scores.append(float((remaining & visible).sum() / union) if union else 0.0)
+        return min(scores)
+    a, b = a_face | a_lower, b_face | b_lower
     union = (a | b).sum()
     return float((a & b).sum() / union) if union else 0.0
 
