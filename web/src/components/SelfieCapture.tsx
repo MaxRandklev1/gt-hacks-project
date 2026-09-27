@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Icon } from './Icon';
 
 export type CapturedSelfie = { file: File; source: 'camera' | 'upload'; selectedAt: number; capturedAt?: number };
-export function SelfieCapture({ value, onChange, preview = false }: { value: CapturedSelfie | null; onChange(value: CapturedSelfie | null): void; preview?: boolean }) {
+export function SelfieCapture({ value, onChange }: { value: CapturedSelfie | null; onChange(value: CapturedSelfie | null): void }) {
   const video = useRef<HTMLVideoElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const stream = useRef<MediaStream | null>(null);
@@ -31,10 +31,8 @@ export function SelfieCapture({ value, onChange, preview = false }: { value: Cap
     const next = URL.createObjectURL(value.file); setUrl(next);
     return () => URL.revokeObjectURL(next);
   }, [value]);
-  useEffect(() => { if (preview) { stop(); setPhase('idle'); } }, [preview]);
 
   async function start() {
-    if (preview) return;
     stop(); const run = generation.current;
     setError(''); setPhase('starting');
     try {
@@ -54,7 +52,7 @@ export function SelfieCapture({ value, onChange, preview = false }: { value: Cap
     }
   }
   async function capture() {
-    if (preview || phase !== 'live' || capturing.current) return;
+    if (phase !== 'live' || capturing.current) return;
     const source = video.current;
     if (!source || source.readyState < 2 || Math.min(source.videoWidth, source.videoHeight) < 384) { stop(); setPhase('idle'); setError('The camera did not provide a clear image. Enable it again; it needs at least 384 pixels on each side.'); return; }
     capturing.current = true; setPhase('capturing'); setError('');
@@ -76,12 +74,11 @@ export function SelfieCapture({ value, onChange, preview = false }: { value: Cap
     } catch (cause) { if (generation.current === run) { stop(); setPhase('idle'); setError(cause instanceof Error ? cause.message : 'Please retake your selfie.'); } }
   }
   function choose() {
-    if (preview) return;
     stop(); setPhase('idle'); setError('');
     if (fileInput.current) { fileInput.current.value = ''; fileInput.current.click(); }
   }
   async function select(file?: File) {
-    if (preview || !file) return;
+    if (!file) return;
     stop(); const run = generation.current;
     setPhase('reading'); setError('');
     const selectedAt = Date.now();
@@ -109,15 +106,15 @@ export function SelfieCapture({ value, onChange, preview = false }: { value: Cap
       <video ref={video} playsInline muted aria-label="Live front camera preview" aria-hidden={phase !== 'live'} />
       {value && url ? <img src={url} alt={value.source === 'camera' ? 'Your captured selfie' : 'Your selected recent selfie'} /> : <>
         <div className="selfie-guide" aria-hidden="true" />
-        {phase !== 'live' && <div className="selfie-placeholder"><Icon name="camera" size={34} /><strong>{preview ? 'Your recent selfie goes here' : 'Your look, right now.'}</strong><span>{preview ? 'Camera and uploads are disabled in design preview.' : 'Take a selfie or choose a recent one.'}</span></div>}
+        {phase !== 'live' && <div className="selfie-placeholder"><Icon name="camera" size={34} /><strong>Your look, right now.</strong><span>Take a selfie or choose a recent one.</span></div>}
       </>}
       <span className="selfie-badge"><span className="status-dot" />{value ? value.source === 'camera' ? 'SELFIE CAPTURED' : 'RECENT SELFIE SELECTED' : phase === 'live' ? 'LIVE CAMERA' : 'RECENT SELFIE REQUIRED'}</span>
     </div>
     {error && <p className="error-message" role="alert">{error}</p>}
-    <input ref={fileInput} type="file" accept="image/jpeg,image/png,image/webp" aria-label="Choose a recent selfie file" hidden disabled={preview} onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; void select(file); }} />
+    <input ref={fileInput} type="file" accept="image/jpeg,image/png,image/webp" aria-label="Choose a recent selfie file" hidden onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; void select(file); }} />
     <div className="selfie-actions">{value ? <><span className="selfie-success"><Icon name="check" size={17} /> Your try-on reference is ready</span><button type="button" className="text-button" onClick={change}><Icon name="retry" size={17} /> Change selfie</button></> : <>
-      {phase === 'live' ? <button type="button" className="button button-ink" onClick={capture}><Icon name="camera" size={19} /> Take selfie</button> : <button type="button" className="button button-ink" disabled={preview || busy} onClick={start}>{busy ? <span className="spinner" /> : <Icon name="camera" size={19} />}{phase === 'starting' ? 'Starting camera…' : phase === 'capturing' ? 'Saving selfie…' : phase === 'reading' ? 'Checking photo…' : 'Take a selfie now'}</button>}
-      <button type="button" className="button button-outline" disabled={preview || busy} onClick={choose}><Icon name="upload" size={17} /> Choose a recent selfie</button>
+      {phase === 'live' ? <button type="button" className="button button-ink" onClick={capture}><Icon name="camera" size={19} /> Take selfie</button> : <button type="button" className="button button-ink" disabled={busy} onClick={start}>{busy ? <span className="spinner" /> : <Icon name="camera" size={19} />}{phase === 'starting' ? 'Starting camera…' : phase === 'capturing' ? 'Saving selfie…' : phase === 'reading' ? 'Checking photo…' : 'Take a selfie now'}</button>}
+      <button type="button" className="button button-outline" disabled={busy} onClick={choose}><Icon name="upload" size={17} /> Choose a recent selfie</button>
       {phase === 'live' && <button type="button" className="text-button" onClick={() => { stop(); setPhase('idle'); }}>Stop camera</button>}
     </>}</div>
     <p className="selfie-footnote">Use a clear, unfiltered photo with your current haircut, facial hair, or usual head covering. Keep your face unobstructed and include your whole head and shoulders. Avoid sunglasses and filters. This one selfie is your try-on reference. JPG, PNG, or WebP · 20 MB max.</p>

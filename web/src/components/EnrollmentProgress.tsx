@@ -4,18 +4,18 @@ import { durationText, enrollmentDisplay } from '../lib/enrollment-display';
 import { Icon } from './Icon';
 import './EnrollmentProgress.css';
 
-export function EnrollmentProgress({ job, awaitingIdentity = false, preview = false }: {
-  job?: Job; awaitingIdentity?: boolean; preview?: boolean;
+export function EnrollmentProgress({ job, awaitingIdentity = false }: {
+  job?: Job; awaitingIdentity?: boolean;
 }) {
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
     setNow(Date.now());
-    if (preview || job?.status === 'completed' || job?.status === 'failed') return;
+    if (job?.status === 'completed' || job?.status === 'failed') return;
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
-  }, [job?.id, job?.status, preview]);
-  const state = enrollmentDisplay(job, now, awaitingIdentity, preview);
-  const status = preview ? 'PROCESS OVERVIEW' : state.failed ? 'SETUP STOPPED' : state.completed ? 'LOOK SAVED'
+  }, [job?.id, job?.status]);
+  const state = enrollmentDisplay(job, now, awaitingIdentity);
+  const status = state.failed ? 'SETUP STOPPED' : state.completed ? 'LOOK SAVED'
     : state.queued ? 'IN THE QUEUE' : 'SETTING UP YOUR LIKENESS';
   const counter = state.counter;
 
@@ -28,7 +28,7 @@ export function EnrollmentProgress({ job, awaitingIdentity = false, preview = fa
         <h2>{state.title}</h2><p>{state.detail}</p>
         {state.message && <p className="enrollment-worker-message">{state.message}</p>}
       </div>
-      {!preview && !state.failed && !state.completed && <div className="enrollment-meter">
+      {!state.failed && !state.completed && <div className="enrollment-meter">
         {counter && <div className="enrollment-counter"><span>{counter.label}</span><strong>{counter.value} of {counter.total}</strong></div>}
         <div className={`progress-track${counter ? '' : ' indeterminate'}`} role="progressbar"
           aria-label={counter?.label || state.title} aria-valuemin={0} aria-valuemax={counter?.total}

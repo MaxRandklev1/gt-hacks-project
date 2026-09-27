@@ -95,10 +95,14 @@ After that reset, a fresh version-3 account completed training in **291.38 secon
 
 `pnpm test` runs the JavaScript suite; rules cases require the configured local emulators. `pnpm test:rules` starts isolated Firestore and Storage emulators (Java 21 required) for the rules suite. The Python test commands are in the [worker guide](../services/worker/README.md).
 
-With no web configuration, the UI offers an explicitly labeled design preview. Preview actions never create an account or pretend to train/upload. Local Firebase emulator mode must be explicitly enabled with `VITE_USE_FIREBASE_EMULATORS=true` and is blocked on remote domains.
+The product experience requires Google sign-in. There is no guest design-preview mode or sample generation history. If Firebase is unconfigured, sign-in is disabled with an explicit availability message. Local Firebase emulator mode must be explicitly enabled with `VITE_USE_FIREBASE_EMULATORS=true` and is blocked on remote domains.
 
 ## Garment inventory
 
 The piece picker lists authenticated Firestore `garments` with `active == true`, orders numbered THREAD items naturally, then shows other active items. It uses the existing try-on request path and per-account queue lock. Loading, empty, retry, unavailable-photo, and in-progress states are explicit; selecting another item is disabled while a try-on is in progress. Catalog images are authenticated Storage blob reads, not public download-token URLs.
 
 Cards prefer `thumbnailPath` and fall back to the reference `imagePath`. Prepare lightweight thumbnails with `services/worker/.venv/Scripts/python.exe scripts/prepare-catalog-thumbnails.py --help`; the script defaults to a dry run. Publishing adds content-addressed, metadata-stripped images and updates only `thumbnailPath`, leaving original references, presets, and printed destinations intact.
+
+## Welcome page video
+
+The welcome page reserves a rectangle for the product walkthrough, shows a prominent **Sign in with Google** button, and uses the same sans-serif heading style throughout. Set the public build variable `VITE_HOMEPAGE_VIDEO_URL` to a hosted video URL when the clip is ready. The video plays muted, loops, supports inline phone playback, and exposes playback controls. Without a source (or if the video fails), the area shows a clear video placeholder. No placeholder media request is made.

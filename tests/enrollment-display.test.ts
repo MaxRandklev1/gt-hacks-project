@@ -86,23 +86,14 @@ describe('Truthful enrollment progress', () => {
     expect(state.failed).toBe(false);
     expect(enrollmentDisplay({ ...queued, createdAt: Timestamp.fromMillis(now - 119_000) }, now).noWorkerUpdateYet).toBe(false);
   });
-  it('does not show the no-worker hint once there is evidence of processing, or in a terminal job or preview', () => {
+  it('does not show the no-worker hint once there is evidence of processing, or in a terminal job', () => {
     const old = { ...queued, createdAt: Timestamp.fromMillis(now - 600_000) };
     expect(enrollmentDisplay({ ...old, updatedAt: Timestamp.fromMillis(now - 5_000) }, now).noWorkerUpdateYet).toBe(false);
     expect(enrollmentDisplay({ ...old, workerSeenAt: Timestamp.fromMillis(now - 5_000) }, now).noWorkerUpdateYet).toBe(false);
     expect(enrollmentDisplay({ ...old, status: 'running' }, now).noWorkerUpdateYet).toBe(false);
     expect(enrollmentDisplay({ ...old, status: 'completed' }, now).noWorkerUpdateYet).toBe(false);
     expect(enrollmentDisplay({ ...old, status: 'failed' }, now).noWorkerUpdateYet).toBe(false);
-    expect(enrollmentDisplay(old, now, false, true).noWorkerUpdateYet).toBe(false);
     expect(enrollmentDisplay(undefined, now).noWorkerUpdateYet).toBe(false);
-  });
-  it('keeps the design preview inert even if supplied a real job', () => {
-    const state = enrollmentDisplay({ ...running, sampling: { step: 7, total: 24 } }, now, false, true);
-    expect(state.active).toBe(false);
-    expect(state.elapsed).toBeUndefined();
-    expect(state.counter).toBeUndefined();
-    expect(state.steps.every(step => step.state === 'pending')).toBe(true);
-    expect(state.title).toBe('A look at the setup process');
   });
 });
 

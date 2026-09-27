@@ -47,15 +47,15 @@ function measuredCounter(value: unknown, total: unknown): { value: number; total
 export type StepState = 'pending' | 'current' | 'done';
 
 /** Presentation uses reported worker stages, never elapsed time or milestone percentages. */
-export function enrollmentDisplay(job: Job | undefined, now: number, awaitingIdentity = false, preview = false) {
+export function enrollmentDisplay(job: Job | undefined, now: number, awaitingIdentity = false) {
   const queued = !job || job.status === 'queued';
-  const failed = !preview && job?.status === 'failed';
-  const completed = !preview && job?.status === 'completed';
-  const active = !preview && !failed && !completed;
+  const failed = job?.status === 'failed';
+  const completed = job?.status === 'completed';
+  const active = !failed && !completed;
   const stage = !queued && !failed && !completed ? stageDetails[job?.stage || ''] : undefined;
-  const preparation = !preview && queued && job?.stage === 'preparing_catalog'
+  const preparation = queued && job?.stage === 'preparing_catalog'
     ? measuredCounter(job.preparation?.completed, job.preparation?.total) : undefined;
-  const sampling = !preview && !queued && !failed && !completed && job?.stage === 'creating_look'
+  const sampling = !queued && !failed && !completed && job?.stage === 'creating_look'
     ? measuredCounter(job.sampling?.step, job.sampling?.total) : undefined;
   const counter = preparation ? { ...preparation, label: 'Shared clothing previews' }
     : sampling ? { ...sampling, label: 'Image creation steps' } : undefined;
@@ -65,7 +65,7 @@ export function enrollmentDisplay(job: Job | undefined, now: number, awaitingIde
   const created = timestampMillis(job?.createdAt);
   // Do not keep a stopped job's timer running, or invent a start time on page load.
   const endpoint = active ? now : lastUpdate;
-  const elapsed = !preview && created !== undefined && endpoint !== undefined
+  const elapsed = created !== undefined && endpoint !== undefined
     ? Math.max(0, endpoint - created) : undefined;
   const updateAge = active && lastUpdate !== undefined ? Math.max(0, now - lastUpdate) : undefined;
   const stale = updateAge !== undefined && updateAge >= 120_000;
@@ -73,10 +73,7 @@ export function enrollmentDisplay(job: Job | undefined, now: number, awaitingIde
   const noWorkerUpdateYet = active && queued && lastUpdate === undefined && elapsed !== undefined && elapsed >= 120_000;
 
   let title: string, detail: string;
-  if (preview) {
-    title = 'A look at the setup process';
-    detail = 'These are the stages you’ll see after submitting a selfie. This preview has not started a request.';
-  } else if (failed) {
+  if (failed) {
     title = 'We couldn’t finish this look';
     detail = job?.error || job?.message || 'Your look was not completed. You can try another clear, front-facing selfie.';
   } else if (completed) {
@@ -91,10 +88,10 @@ export function enrollmentDisplay(job: Job | undefined, now: number, awaitingIde
     title = stage?.title || 'Starting your setup';
     detail = stage?.detail || 'The worker has accepted your request. Waiting for the next reported stage.';
   }
-  const message = !preview && !failed && (!queued || job?.stage === 'preparing_catalog')
+  const message = !failed && (!queued || job?.stage === 'preparing_catalog')
     && job?.message && job.message !== title && job.message !== detail ? job.message : undefined;
   const steps = enrollmentSteps.map((step, index) => ({ ...step,
-    state: (completed ? 'done' : stage && !preview ? index < stage.index ? 'done' : index === stage.index ? 'current' : 'pending' : 'pending') as StepState,
+    state: (completed ? 'done' : stage ? index < stage.index ? 'done' : index === stage.index ? 'current' : 'pending' : 'pending') as StepState,
   }));
   return { title, detail, message, queued, failed, completed, active, counter, elapsed, updateAge, stale, noWorkerUpdateYet, steps };
 }
