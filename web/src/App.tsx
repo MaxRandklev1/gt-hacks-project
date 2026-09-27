@@ -199,9 +199,11 @@ function App() {
   const measurementValid = measurementsValid(measurements);
   const accountBodyNote = preview
     ? 'Height and weight help select the closest of five body templates. This is an approximate appearance preview, not an exact fit prediction.'
-    : profile?.identity?.bodyTemplate?.policyVersion === 'bmi-visual-v1'
+    : profile?.identity?.bodyTemplate?.policyVersion === 'bmi-visual-v2'
       ? 'Your saved look uses one of five body templates selected from your height and weight. Updated measurements take effect after you rebuild your look; this is an appearance preview, not exact fit.'
-      : 'Your saved look still uses the earlier shared body. Update your details and rebuild your look to select from five body templates; the preview does not predict exact fit.';
+      : profile?.identity?.bodyTemplate?.policyVersion === 'bmi-visual-v1'
+        ? 'Your saved look uses the earlier body ranges; update your details and rebuild it to use the revised sizing. This is an approximate appearance preview, not a clothing-fit prediction.'
+        : 'Your saved look still uses the earlier shared body. Update your details and rebuild your look to select from five body templates; the preview does not predict exact fit.';
 
   function navigate(next: Screen) {
     setError(''); setNotice('');

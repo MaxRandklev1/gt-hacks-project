@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 from PIL import Image
 
 from services.worker.body_templates import BODY_TEMPLATE_IDS, select_body_template
-from services.worker.personal import CompositeError, png_bytes
+from services.worker.personal import CompositeError, personal_paths, png_bytes
 from services.worker.worker import JobError, Worker, main, now, saved_body_template, sha256, validate_garment
 
 
@@ -225,11 +225,41 @@ class BodyEnrollmentTests(unittest.TestCase):
             self.assertEqual(worker.styled_garment.call_args.args[2]["baseImagePath"], "garments/shirt/base.png")
             self.assertTrue(worker.styled_garment.call_args.kwargs["allow_render"])
 
+    def test_previous_policy_identity_still_scans_its_saved_body_after_update(self):
+        with tempfile.TemporaryDirectory() as temp:
+            worker, store, comfy, user, garments = self.setup_enroll(temp)
+            height, weight = 68 * 2.54, 170 * 0.45359237
+            snapshot = select_body_template(height, weight, policy_version="bmi-visual-v1")
+            self.assertEqual(snapshot["id"], "weight-4")
+            self.assertEqual(select_body_template(height, weight)["id"], "weight-3")
+            assets = {"p1024": png(), "p2k": png(32), "hair": png(color="black"), "tee": png(color="black")}
+            paths = personal_paths("alice", "old-enroll", "pose-weight-4")
+            record = paths | {name + "Sha256": sha256(data) for name, data in assets.items()}
+            identity = {"status": "ready", "mode": "personal_base", "version": "old-enroll",
+                        "bodyTemplate": snapshot, "personalBases": {"pose-weight-4": record}}
+            worker.cache_personal("alice", "old-enroll", "pose-weight-4", assets)
+            store.garment.return_value = garments[0][1]
+            worker.styled_garment.return_value = ("old-render", (Path("a"), Path("b")), "pose-weight-4")
+            lease = Mock()
+            # Current profile measurements also differ: neither the new policy nor new measurements reroutes the old look.
+            worker.generate("scan1", {"garmentId": "shirt"}, "alice", user | {"weightKg": 120, "identity": identity}, Path(temp), lease)
+            self.assertEqual(worker.styled_garment.call_args.args[2]["baseImagePath"], "garments/shirt/body-bases/weight-4.png")
+            self.assertFalse(worker.styled_garment.call_args.kwargs["allow_render"])
+            self.assertEqual(lease.write.call_args.kwargs["generation"]["bodyTemplateId"], "weight-4")
+            self.assertEqual(worker.composite_tryon.call_args.args[0]["p1024"].getpixel((0, 0)), (0, 0, 128))
+            worker.personal_base.assert_not_called()
+            store.download.assert_not_called()
+            comfy.submit.assert_not_called()
+
     def test_invalid_saved_snapshot_is_not_silently_reselected(self):
         selected = select_body_template(180, 68)
         self.assertEqual(saved_body_template({"bodyTemplate": selected}), "weight-2")
         self.assertIsNone(saved_body_template({}))
-        for bad in (None, {}, selected | {"id": "weight-5"}, selected | {"weightKg": True}, selected | {"bmi": 0}):
+        previous = select_body_template(68 * 2.54, 170 * 0.45359237, policy_version="bmi-visual-v1")
+        self.assertEqual(saved_body_template({"bodyTemplate": previous}), "weight-4")
+        for bad in (None, {}, selected | {"id": "weight-5"}, selected | {"weightKg": True}, selected | {"bmi": 0},
+                    selected | {"policyVersion": "bmi-visual-v3"}, selected | {"policyVersion": None},
+                    {key: value for key, value in selected.items() if key != "policyVersion"}, previous | {"id": "weight-3"}):
             with self.subTest(bad=bad), self.assertRaises(JobError):
                 saved_body_template({"bodyTemplate": bad})
 

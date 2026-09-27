@@ -227,7 +227,8 @@ def saved_body_template(identity):
     if not isinstance(snapshot, dict):
         raise JobError("Your saved body template is incomplete. Set up your look again.")
     try:
-        expected = select_body_template(snapshot.get("heightCm"), snapshot.get("weightKg"))
+        expected = select_body_template(snapshot.get("heightCm"), snapshot.get("weightKg"),
+                                        policy_version=snapshot.get("policyVersion"))
     except (ValueError, TypeError):
         raise JobError("Your saved measurements are invalid. Set up your look again.") from None
     if any(snapshot.get(key) != value for key, value in expected.items()):

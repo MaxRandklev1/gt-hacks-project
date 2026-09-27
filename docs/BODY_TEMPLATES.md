@@ -10,21 +10,22 @@ The existing US inputs convert total feet/inches to centimetres with 2.54 and po
 
 | Template | Source image | BMI range |
 | --- | --- | --- |
-| `weight-1` | `Pose1_Weight1_Male.png` | below 18.5 |
-| `weight-2` | `Pose1_Weight2_Male.png` | 18.5 up to, but not including, 22 |
-| `weight-3` | `Pose1_Weight3_Male.png` | 22 up to, but not including, 25 |
-| `weight-4` | `Pose1_Weight4_Male.png` | 25 up to, but not including, 30 |
-| `weight-5` | `Pose1_Weight5_Male.png` | 30 and above |
+| `weight-1` | `Pose1_Weight1_Male.png` | below 20.35 |
+| `weight-2` | `Pose1_Weight2_Male.png` | 20.35 up to, but not including, 24.2 |
+| `weight-3` | `Pose1_Weight3_Male.png` | 24.2 up to, but not including, 27.5 |
+| `weight-4` | `Pose1_Weight4_Male.png` | 27.5 up to, but not including, 33 |
+| `weight-5` | `Pose1_Weight5_Male.png` | 33 and above |
 
-The [BMI calculation and thresholds 18.5, 25 and 30](https://www.cdc.gov/bmi/adult-calculator/bmi-categories.html) follow CDC documentation. The additional split at 22 is an application choice to distribute this particular five-image set. These are visual template ranges, not five clinical categories. BMI does not uniquely determine proportions, muscle mass, or clothing fit; the resulting image is an approximate appearance preview. The UI uses neutral wording and does not label the person's body or health.
+Policy `bmi-visual-v2` raises every original visual cutoff by 10%, from `(18.5, 22, 25, 30)` to `(20.35, 24.2, 27.5, 33)`. The owner's reference of 5 ft 8 in and 170 lb converts to 172.72 cm and 77.1107029 kg, with BMI 25.848146310263207, near the midpoint of template 3's revised range. The [BMI calculation](https://www.cdc.gov/bmi/adult-calculator/bmi-categories.html) and stored measurements remain unchanged; only the mapping to these particular images changes. These are application-specific visual ranges, not clinical BMI categories. BMI does not uniquely determine proportions, muscle mass, or clothing fit; the resulting image is an approximate appearance preview. The UI uses neutral wording and does not label the person's body or health.
 
 ## Identity and garment alignment
 
 - The server chooses the template. Browser requests cannot submit a template ID, alternative file path, or model setting.
-- The identity and private manifest store `bodyTemplate: {id, bmi, heightCm, weightKg, policyVersion: "bmi-visual-v1"}` when onboarding completes.
+- The identity and private manifest store `bodyTemplate: {id, bmi, heightCm, weightKg, policyVersion: "bmi-visual-v2"}` when new onboarding or a rebuild completes.
 - Each garment render uses the same selected pose source as the personal base. All active garments must resolve to one pose hash for that selection, so onboarding still generates one personal base.
 - Garment alignment allows collars and hems to cover the template's exposed neck or pants. It requires at least half of each original face and lower-body region to remain visible, and both visible regions must independently pass the 0.85 overlap threshold. Versioned mask caches recompute these checks on the CPU without rerendering clothing. Personal-base alignment checks remain unchanged.
 - Every scan uses the saved identity's template snapshot. Editing profile measurements alone cannot composite a differently shaped garment onto the old body. **Update details and rebuild look** applies new measurements through the existing single-selfie flow.
+- Existing `bmi-visual-v1` snapshots are validated with their original `(18.5, 22, 25, 30)` cutoffs and keep their original body until rebuilt. Missing or unknown policy versions are rejected. Changing the default policy does not relabel already-rendered personal bases or require any garment presets to be regenerated.
 - Existing identities without a body-template snapshot retain their original pose and cached garments until rebuilt.
 - Version A's face pipeline stays at 24 steps, BFS strength 0.65, a 0.35 MP selfie reference, neutral expression and no close-up redraw. Output remains 1024 plus 2K on the fast path.
 

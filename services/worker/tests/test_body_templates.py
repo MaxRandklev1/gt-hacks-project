@@ -7,15 +7,32 @@ from services.worker.body_templates import BODY_TEMPLATE_IDS, BODY_TEMPLATE_POLI
 class BodyTemplatePolicyTests(unittest.TestCase):
     def test_every_boundary_uses_unrounded_bmi(self):
         # 200 cm gives an exact denominator of 4, isolating boundary behavior.
-        for bmi, expected in ((18.4999, 1), (18.5, 2), (21.9999, 2), (22, 3),
-                              (24.9999, 3), (25, 4), (29.9999, 4), (30, 5), (50, 5)):
-            with self.subTest(bmi=bmi):
-                result = select_body_template(200, bmi * 4)
-                self.assertEqual(result["id"], f"weight-{expected}")
-                self.assertEqual(result["bmi"], bmi)
-                self.assertEqual(result["heightCm"], 200)
-                self.assertEqual(result["weightKg"], bmi * 4)
-                self.assertEqual(result["policyVersion"], BODY_TEMPLATE_POLICY_VERSION)
+        policies = {"bmi-visual-v1": (18.5, 22, 25, 30), "bmi-visual-v2": (20.35, 24.2, 27.5, 33.0)}
+        for policy, cutoffs in policies.items():
+            for index, cutoff in enumerate(cutoffs):
+                for bmi, expected in ((cutoff - 0.0001, index + 1), (cutoff, index + 2), (cutoff + 0.0001, index + 2)):
+                    with self.subTest(policy=policy, bmi=bmi):
+                        result = select_body_template(200, bmi * 4, policy_version=policy)
+                        self.assertEqual(result["id"], f"weight-{expected}")
+                        self.assertEqual(result["bmi"], bmi)
+                        self.assertEqual(result["heightCm"], 200)
+                        self.assertEqual(result["weightKg"], bmi * 4)
+                        self.assertEqual(result["policyVersion"], policy)
+
+    def test_five_foot_eight_170_pounds_defaults_to_new_middle_template(self):
+        height, weight = 68 * 2.54, 170 * 0.45359237
+        current = select_body_template(height, weight)
+        previous = select_body_template(height, weight, policy_version="bmi-visual-v1")
+        self.assertEqual(BODY_TEMPLATE_POLICY_VERSION, "bmi-visual-v2")
+        self.assertEqual((current["id"], current["policyVersion"]), ("weight-3", "bmi-visual-v2"))
+        self.assertEqual((previous["id"], previous["policyVersion"]), ("weight-4", "bmi-visual-v1"))
+        self.assertEqual(current["bmi"], previous["bmi"])  # Keep the real measurement, not an adjusted BMI.
+        self.assertAlmostEqual(current["bmi"], weight / (height / 100) ** 2, places=13)
+
+    def test_unknown_versions_never_fall_back_to_current_policy(self):
+        for version in (None, True, False, [], {}, "", "bmi-visual-v3", "BMI-VISUAL-V1"):
+            with self.subTest(version=version), self.assertRaises(ValueError):
+                select_body_template(180, 75, policy_version=version)
 
     def test_equivalent_us_and_metric_inputs_choose_the_same_template(self):
         height_cm = (5 * 12 + 10) * 2.54
