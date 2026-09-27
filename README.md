@@ -1,6 +1,6 @@
 # THREAD — GT Hacks virtual try-on
 
-**Live app: [gt-hacks-thread-2026.firebaseapp.com](https://gt-hacks-thread-2026.firebaseapp.com)** · **[Three demo QR codes](https://gt-hacks-thread-2026.firebaseapp.com/tags/demo-clothes.html)**
+**Live app: [gt-hacks-thread-2026.firebaseapp.com](https://gt-hacks-thread-2026.firebaseapp.com)** · **[Ten permanent QR codes](https://gt-hacks-thread-2026.firebaseapp.com/tags/demo-clothes.html)**
 
 THREAD is a deployed virtual try-on web app backed by Firebase and a local ComfyUI GPU worker. A garment QR code opens its item in the app. After Google sign-in, onboarding is **height/weight, one selfie and consent** — no photo set and no identity training. In about a minute the worker builds the person's **personal base**: the fixed model pose with their own face, hair or head covering, beard, glasses and skin tone, and a neutral expression whatever face they pulled in the selfie. Every scan then composites the garment onto that look on the CPU in about 1.4 seconds of worker time, saving a 1024 PNG and a 2048 × 2048 JPEG. See the [personal-base guide](comfy-identity/FAST_TRYON_README.md).
 
@@ -20,15 +20,24 @@ The project currently works on **still images**. Firebase hosts the app, authent
 
 ## Run the deployed demo
 
-Open the [three-code demo page](https://gt-hacks-thread-2026.firebaseapp.com/tags/demo-clothes.html) on a PC and scan a code with a phone. Each card also opens a larger code. The [local copy](docs/tags/demo-clothes.html) and individual tags can be displayed offline or printed with their white QR borders intact; the phone needs internet for the app. A new account retains the scanned selection through onboarding. Start the worker a few minutes before presenting so every active garment is pre-rendered; after that, onboarding and each scan take seconds. Scan one piece at a time and wait for its result before starting the next.
+Open the [ten-code display](https://gt-hacks-thread-2026.firebaseapp.com/tags/demo-clothes.html) on a PC and scan a code with a phone, or print the [all-ten PDF](docs/tags/thread-tags-print.pdf) at actual size with the white QR borders intact. Each card also opens a larger code. The [local copy](docs/tags/demo-clothes.html) and individual tags can be displayed offline; the phone needs internet for the app. A new account retains the scanned selection through onboarding. Scan one piece at a time and wait for its result before starting the next.
 
 | Tag | Local garment source | Clothing |
 | --- | --- | --- |
 | `thread-1` | `ClothesSwap/THREAD1.png` | Navy and white striped polo |
 | `thread-2` | `ClothesSwap/THREAD2.png` | Dragon graphic T-shirt |
 | `thread-3` | `ClothesSwap/THREAD3.png` | Olive hooded jacket |
+| `thread-4` | `ClothesSwap/THREAD4.png` | White motorsport long-sleeve shirt |
+| `thread-5` | `ClothesSwap/THREAD5.png` | Black hooded puffer jacket |
+| `thread-6` | `ClothesSwap/THREAD6.png` | Black number 8 football jersey |
+| `thread-7` | `ClothesSwap/THREAD7.png` | Dark USA soccer jersey |
+| `thread-8` | `ClothesSwap/THREAD8.png` | Black zip-up track jacket |
+| `thread-9` | `ClothesSwap/THREAD9.png` | Green marathon long-sleeve shirt |
+| `thread-10` | `ClothesSwap/THREAD10.png` | Black tuxedo print T-shirt |
 
-All three active Firebase catalog entries use the existing white-shirt pose image as their base. Their stored garment/base images were checked against the normalized source files. `pnpm qr:demo` regenerates both the local tags and `web/public/tags/` copies; build and deploy Hosting to publish them. The earlier `demo-shirt` tag remains available.
+**Printed destinations are final:** `https://gt-hacks-thread-2026.firebaseapp.com/g/thread-1` through `/g/thread-10` are pinned in [printed-threads.json](docs/tags/printed-threads.json), together with source mappings and SVG SHA-256 hashes. They contain no expiring token or temporary redirect. Keep this Firebase hostname and these garment IDs for the life of the printed tags; never renumber them or reuse an ID for another piece. App deployments, image updates and preset rebuilds must preserve those routes. The original THREAD 1–3 QR SVG bytes are unchanged.
+
+`pnpm qr:demo` reproduces the matching local and `web/public/tags/` pages and verifies frozen SVGs before writing. It refuses an alternate origin or a mismatched existing SVG. `pnpm qr` cannot overwrite reserved THREAD 1–10 tags. Then run `python scripts/create-print-tags.py` in a Python environment with ReportLab to rebuild both matching PDF copies from the manifest and frozen SVGs. Build and deploy Hosting to publish the static pages; the earlier `demo-shirt` tag remains available. The QR destinations do not expire, but the app and worker must stay available. Creating a tag does not publish or prepare its garment: THREAD 1–3 were already active at this release; THREAD 4–10 require their catalog images and shared body presets before try-on is ready.
 
 Keep the **GPU PC, ComfyUI and local worker online**. On the configured Windows machine, start ComfyUI, then run this from the repository root:
 

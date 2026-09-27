@@ -1,6 +1,7 @@
 * text=auto
 *.py text eol=lf
 *.js text eol=lf
+*.mjs text eol=lf
 *.cjs text eol=lf
 *.css text eol=lf
 *.json text eol=lf
@@ -8,3 +9,7 @@
 *.ps1 text eol=crlf
 *.png binary
 *.jpg binary
+*.pdf binary
+# Printed QR integrity hashes must survive checkout on every operating system.
+docs/tags/*.svg text eol=lf
+web/public/tags/*.svg text eol=lf

@@ -9,3 +9,7 @@ The user explicitly requested that project changes be committed and pushed to Gi
 - Respect `.gitignore`: original identity photos, local profile libraries and personal model weights, model downloads, environments, logs, machine configuration, and bulk outputs stay local. Selected metadata-stripped demo outputs under `docs/demo/` are intended to be versioned.
 - Keep reusable ComfyUI workflows, API graphs, builder scripts, custom-node sources, and setup documentation together. Installed ComfyUI copies are outside this repository; changes there should also be reflected in the authored source here when appropriate.
 - Keep prompts person-neutral. The base pose/body, selected identity, and garment reference have separate roles. Preserve the original 1024 output alongside the 4K upscale.
+
+## Printed clothing tags
+
+The user finalized the ten printed QR codes on September 27, 2026. Preserve the exact URLs and garment assignments in `docs/tags/printed-threads.json`: `https://gt-hacks-thread-2026.firebaseapp.com/g/thread-1` through `/g/thread-10`, mapped to `ClothesSwap/THREAD1.png` through `THREAD10.png`. Never renumber, recycle, expire, or silently replace these destinations or QR SVGs. App deployments, cache rebuilds, and catalog preparation must keep already-printed tags working. If hosting changes later, retain these original routes as permanent redirects. Use new IDs for additional garments.

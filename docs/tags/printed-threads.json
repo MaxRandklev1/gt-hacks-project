@@ -1,0 +1,87 @@
+{
+  "schema": 1,
+  "origin": "https://gt-hacks-thread-2026.firebaseapp.com",
+  "frozenOn": "2026-09-27",
+  "garments": [
+    {
+      "id": "thread-1",
+      "label": "THREAD 1",
+      "description": "Navy & white striped polo",
+      "source": "ClothesSwap/THREAD1.png",
+      "url": "https://gt-hacks-thread-2026.firebaseapp.com/g/thread-1",
+      "svgSha256": "2bed284c9a428016334d8d040686b621b5377e51d6c0db1ced15eb4dd0e22a10"
+    },
+    {
+      "id": "thread-2",
+      "label": "THREAD 2",
+      "description": "Dragon graphic T-shirt",
+      "source": "ClothesSwap/THREAD2.png",
+      "url": "https://gt-hacks-thread-2026.firebaseapp.com/g/thread-2",
+      "svgSha256": "4422f42aec2bea39bbf5937a5711393284f5d69839afc704920cb22ba9515bc1"
+    },
+    {
+      "id": "thread-3",
+      "label": "THREAD 3",
+      "description": "Olive hooded jacket",
+      "source": "ClothesSwap/THREAD3.png",
+      "url": "https://gt-hacks-thread-2026.firebaseapp.com/g/thread-3",
+      "svgSha256": "c4670f38bad7296c3ad322149c06ac08e15423f0fad07ccf410a014e794d12e0"
+    },
+    {
+      "id": "thread-4",
+      "label": "THREAD 4",
+      "description": "White motorsport long-sleeve shirt",
+      "source": "ClothesSwap/THREAD4.png",
+      "url": "https://gt-hacks-thread-2026.firebaseapp.com/g/thread-4",
+      "svgSha256": "b57eee59f7d14c2e16e1cb574cad555ab56d1db70204efcbc5a65f089d825778"
+    },
+    {
+      "id": "thread-5",
+      "label": "THREAD 5",
+      "description": "Black hooded puffer jacket",
+      "source": "ClothesSwap/THREAD5.png",
+      "url": "https://gt-hacks-thread-2026.firebaseapp.com/g/thread-5",
+      "svgSha256": "fa107c3e2b6a1c400f94bf9e53a0724fb45d92cdfdfc39353f433a9157b5ceb3"
+    },
+    {
+      "id": "thread-6",
+      "label": "THREAD 6",
+      "description": "Black number 8 football jersey",
+      "source": "ClothesSwap/THREAD6.png",
+      "url": "https://gt-hacks-thread-2026.firebaseapp.com/g/thread-6",
+      "svgSha256": "a5e4dd0b385584982798f1897c01707b4829fbedb66ab2270d04ff49f886cc4e"
+    },
+    {
+      "id": "thread-7",
+      "label": "THREAD 7",
+      "description": "Dark USA soccer jersey",
+      "source": "ClothesSwap/THREAD7.png",
+      "url": "https://gt-hacks-thread-2026.firebaseapp.com/g/thread-7",
+      "svgSha256": "d769dfc8ab4f4b6cd769a4078fd4fd24f41fe13546ea960d2eaa0e4f55701099"
+    },
+    {
+      "id": "thread-8",
+      "label": "THREAD 8",
+      "description": "Black zip-up track jacket",
+      "source": "ClothesSwap/THREAD8.png",
+      "url": "https://gt-hacks-thread-2026.firebaseapp.com/g/thread-8",
+      "svgSha256": "572f052f890e8c206ed818928bfb56e191b7ac663b6a3050ab3123351fb93fc9"
+    },
+    {
+      "id": "thread-9",
+      "label": "THREAD 9",
+      "description": "Green marathon long-sleeve shirt",
+      "source": "ClothesSwap/THREAD9.png",
+      "url": "https://gt-hacks-thread-2026.firebaseapp.com/g/thread-9",
+      "svgSha256": "81f2efc5fa076d62df8eaadf14f2e81db68947b13fee21f3645931d36ed15a4f"
+    },
+    {
+      "id": "thread-10",
+      "label": "THREAD 10",
+      "description": "Black tuxedo print T-shirt",
+      "source": "ClothesSwap/THREAD10.png",
+      "url": "https://gt-hacks-thread-2026.firebaseapp.com/g/thread-10",
+      "svgSha256": "d76f01b527d4c170487c9e20764c4a84ed4dcd5fad88fda8c843f356f8cc39e3"
+    }
+  ]
+}

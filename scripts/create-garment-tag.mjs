@@ -6,6 +6,9 @@ const [origin, garmentId, ...titleWords] = process.argv.slice(2);
 if (!origin || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/.test(garmentId || '')) {
   throw new Error('Usage: pnpm qr https://YOUR-PROJECT.firebaseapp.com garment-id Item name');
 }
+if (/^thread-(?:[1-9]|10)$/i.test(garmentId)) {
+  throw new Error('THREAD 1–10 are reserved permanent printed tags. Use pnpm qr:demo to reproduce their pinned assets; their destinations must never change.');
+}
 const base = new URL(origin);
 if (base.protocol !== 'https:' && !['localhost','127.0.0.1'].includes(base.hostname)) throw new Error('Use the HTTPS address judges can reach on their phones.');
 const url = new URL(`/g/${garmentId}`, base.origin).href;
