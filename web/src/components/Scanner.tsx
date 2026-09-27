@@ -1,17 +1,20 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useImperativeHandle, useRef, useState, type Ref } from 'react';
 import { Icon } from './Icon';
 
 type Detector = { detect(source: HTMLVideoElement | ImageBitmap): Promise<{ rawValue: string }[]> };
 type DetectorConstructor = new (options: { formats: string[] }) => Detector;
 type ScannerControls = { stop(): void };
 
-export function Scanner({ onDetected, onClose }: { onDetected(value: string): void; onClose(): void }) {
+export type ScannerHandle = { start(): void };
+
+export function Scanner({ onDetected, onClose, ref }: { onDetected(value: string): void; onClose(): void; ref?: Ref<ScannerHandle> }) {
   const video = useRef<HTMLVideoElement>(null);
   const stream = useRef<MediaStream | null>(null);
   const controls = useRef<ScannerControls | null>(null);
   const frame = useRef<number | null>(null);
   const generation = useRef(0);
   const reading = useRef(false);
+  const cameraRunning = useRef(false);
   const onDetectedRef = useRef(onDetected);
   const [active, setActive] = useState(false);
   const [starting, setStarting] = useState(false);
@@ -22,6 +25,7 @@ export function Scanner({ onDetected, onClose }: { onDetected(value: string): vo
 
   function stop() {
     generation.current += 1;
+    cameraRunning.current = false;
     if (frame.current !== null) cancelAnimationFrame(frame.current);
     frame.current = null;
     controls.current?.stop();
@@ -47,12 +51,15 @@ export function Scanner({ onDetected, onClose }: { onDetected(value: string): vo
   }
 
   async function start() {
+    video.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    if (cameraRunning.current) return;
     stop();
+    cameraRunning.current = true;
     const run = generation.current;
     setError('');
     setStarting(true);
     try {
-      if (!navigator.mediaDevices?.getUserMedia) throw new Error('Camera access needs HTTPS and a supported browser. You can also upload a QR image or enter its code below.');
+      if (!navigator.mediaDevices?.getUserMedia) throw new Error('Camera access needs HTTPS and a supported browser. You can also upload a QR image below.');
       const DetectorClass = (window as unknown as { BarcodeDetector?: DetectorConstructor }).BarcodeDetector;
       if (DetectorClass) {
         let detector: Detector | null = null;
@@ -99,9 +106,11 @@ export function Scanner({ onDetected, onClose }: { onDetected(value: string): vo
       stop();
       setActive(false);
       setStarting(false);
-      setError(cause instanceof DOMException && cause.name === 'NotAllowedError' ? 'Camera permission was not granted. Allow access in your browser, or use either option below.' : cause instanceof Error ? cause.message : 'The camera could not start. Try a QR image or garment code.');
+      setError(cause instanceof DOMException && cause.name === 'NotAllowedError' ? 'Camera permission was not granted. Allow access in your browser, or upload a QR image below.' : cause instanceof Error ? cause.message : 'The camera could not start. Try uploading a QR image.');
     }
   }
+
+  useImperativeHandle(ref, () => ({ start }));
 
   async function scanFile(selected?: File) {
     if (!selected) return;
@@ -124,7 +133,7 @@ export function Scanner({ onDetected, onClose }: { onDetected(value: string): vo
       }
       if (generation.current === run) accept(value);
     } catch {
-      if (generation.current === run) setError('No QR code was found in that image. Try a clearer photo or enter the garment code.');
+      if (generation.current === run) setError('No QR code was found in that image. Try a clearer photo.');
     } finally { URL.revokeObjectURL(url); if (file.current) file.current.value = ''; }
   }
 
