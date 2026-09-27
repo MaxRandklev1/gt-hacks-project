@@ -52,11 +52,13 @@ The catalog CLI uses `FIREBASE_PROJECT_ID`, `FIREBASE_STORAGE_BUCKET` and ADC, w
 
 ```powershell
 & .\.venv\Scripts\python.exe .\catalog.py seed-garment `
-  --id demo-shirt --name 'Demo shirt' --brand 'Demo' `
+  --id new-shirt --name 'New shirt' --brand 'THREAD' `
   --reference 'C:/private/catalog/shirt.png' --base 'C:/private/catalog/pose.png'
 ```
 
-Both images are decoded, oriented, converted to RGB PNG and stripped of metadata before upload. Each input and normalized PNG is limited to 20 MiB, and input dimensions to 40 megapixels. The command creates `garments/demo-shirt/reference.png` and `garments/demo-shirt/base.png`, then merges an active `garments/demo-shirt` document. Existing images are read with a generation-pinned byte range and checked against the normalized image hash; identical bytes are reused without upload. Different bytes stop the command with instructions to use a new garment ID or an explicit admin update. Missing images use create-only generation preconditions. Other catalog entries remain intact, and no object is deleted or overwritten; object viewer plus creator permissions suffice for image seeding. Storage and Firestore are separate services, so an interrupted seed can leave only part of the update; rerun the same command to complete it. No public download token is created.
+Both images are decoded, oriented, converted to RGB PNG and stripped of metadata before upload. Each input and normalized PNG is limited to 20 MiB, and input dimensions to 40 megapixels. The command creates `garments/new-shirt/reference.png` and `garments/new-shirt/base.png`, then merges an active `garments/new-shirt` document. Existing images are read with a generation-pinned byte range and checked against the normalized image hash; identical bytes are reused without upload. Different bytes stop the command with instructions to use a new garment ID or an explicit admin update. Missing images use create-only generation preconditions. Other catalog entries remain intact, and no object is deleted or overwritten; object viewer plus creator permissions suffice for image seeding. Storage and Firestore are separate services, so an interrupted seed can leave only part of the update; rerun the same command to complete it. No public download token is created.
+
+**Retired garment:** `demo-shirt` (The photographic tee) is inactive at the owner’s request. Do not run `seed-garment` for that ID unless explicitly restoring it; seeding sets `active: true`. Its assets and historical results are retained. THREAD 1–10 and their printed tags are unchanged.
 
 ## Configure browser origins
 
