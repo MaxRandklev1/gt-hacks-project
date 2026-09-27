@@ -84,5 +84,8 @@ application_default_credentials.json
 /services/worker/.venv/
 /services/worker/.worker-cache/
 !/web/public/demo/*.png
+# Selected homepage media is public and ships with every site deployment.
+!/web/public/media/thread-reel.mp4
+!/web/public/media/thread-reel-poster.jpg
 /comfy-identity/personal-base-acceptance/
 /comfy-identity/likeness-lab-sessions/
