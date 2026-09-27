@@ -15,6 +15,7 @@ import json
 from pathlib import Path
 import re
 import threading
+import time
 import uuid
 
 import numpy as np
@@ -37,6 +38,63 @@ MIN_ALIGNMENT = 0.85  # Each visible pose anchor for garments; original lower-bo
 GARMENT_MASK_VERSION = 2  # Recompute masks/scores after the bounded collar/hem-occlusion update.
 MAX_ASSET_BYTES = 40 * 1024 * 1024
 HEX = re.compile(r"[0-9a-f]{64}")
+
+
+class PersonalProgress:
+    """Observed stages and sampler counts, never a guessed total-completion percentage."""
+
+    def __init__(self, notify, details=None):
+        self.notify, self.details = notify, details
+        self.fields, self.sent = {}, {}
+        self.sent_at = 0.0
+        self.upscale_nodes = frozenset()
+
+    def observe_graph(self, graph):
+        expected = {"34": "ImageUpscaleWithModel", "37": "SplitImageWithAlpha", "38": "ImageScaleBy", "35": "SaveImage"}
+        self.upscale_nodes = {node for node, kind in expected.items() if graph.get(node, {}).get("class_type") == kind}
+
+    def publish(self, force=False):
+        stamp = time.monotonic()
+        changed = self.fields != self.sent
+        if not self.fields or not (force or (changed and stamp - self.sent_at >= 1) or stamp - self.sent_at >= 10):
+            return
+        if self.details is not None:
+            self.details(dict(self.fields))
+        else:
+            self.notify(self.fields["message"], None)
+        self.sent, self.sent_at = dict(self.fields), stamp
+
+    def stage(self, stage, message):
+        self.fields = {"stage": stage, "message": message, "progress": None, "sampling": None}
+        self.publish(force=True)
+
+    def event(self, event):
+        if event.get("unavailable"):
+            if self.fields.get("sampling") is not None:
+                self.stage("creating_look", "Creating your look. Step updates are unavailable; the worker is still monitoring the image.")
+            return
+        node = event.get("node")
+        if node == "9" and self.fields.get("stage") in ("upscaling_look", "fitting_look", "saving_look", "ready"):
+            return  # Delayed transport events cannot move completed stages backward.
+        if node == "9" and "step" in event:
+            step, total = event["step"], event["total"]
+            if type(step) is not int or type(total) is not int or not 0 <= step <= total <= 10000 or total <= 0:
+                return
+            previous = self.fields.get("sampling")
+            if previous and (total != previous["total"] or step < previous["step"]):
+                return
+            self.fields = {"stage": "creating_look", "message": f"Creating your look: step {step} of {total}.",
+                           "progress": None, "sampling": {"step": step, "total": total}}
+            self.publish()
+        elif node == "9":
+            if self.fields.get("sampling") is None:
+                self.stage("creating_look", "Creating your face, hair and skin tone on the selected body.")
+        elif node in self.upscale_nodes:
+            if self.fields.get("stage") != "upscaling_look":
+                self.stage("upscaling_look", "Preparing the higher-resolution version of your look.")
+
+    def heartbeat(self):
+        self.publish()
 
 
 def sha256(data):
@@ -156,26 +214,33 @@ class PersonalBaseMixin:
 
     # ---- onboarding -----------------------------------------------------------------------------
 
-    def personal_base(self, uid, job_id, selfie_path, base_key, guard, notify):
+    def personal_base(self, uid, job_id, selfie_path, base_key, guard, notify, *, details=None):
         """Generate, lock and mask one personal base. Returns PNG bytes: 1024, 2K, hair/covering mask, tee mask."""
+        progress = PersonalProgress(notify, details)
+        progress.stage("preparing_reference", "Finding your face, hair and head covering in your selfie.")
         crop_path = Path(selfie_path).with_name("selfie-crop.png")
         selfie = Image.open(selfie_path).convert("RGB")
         head_crop(selfie, self.human().parse(selfie)).save(crop_path)
         guard()
+        progress.stage("preparing_reference", "Preparing your selfie and the selected body reference.")
         profile = self.comfy.create_profile("personal-" + sha256(uid.encode())[:12] + "-" + job_id[:20], [crop_path])
         need_pose = not self.pose_ready(base_key)
         base_name = self.comfy.upload_image(self.pose_dir(base_key) / "source.png")
         graph = patch_personal_graph(self.personal_template, base_image=base_name, profile_id=safe_id(profile["id"]),
                                      job_id=job_id, steps=PERSONAL_STEPS, base_outputs=need_pose)
-        notify("Creating your look.", 0.25)
+        progress.observe_graph(graph)
+        progress.stage("creating_look", "Loading image models and processing your reference. Your look is starting.")
         guard()
-        prompt_id = self.comfy.submit(graph, job_id)
-        result = self.comfy.wait_generation(prompt_id, guard, lambda: None, timeout=900, interval=0.5)
+        # Connect before the one non-retried submission. Missing/disconnected observation never resubmits work.
+        with self.comfy.progress_events(job_id) as events:
+            prompt_id = self.comfy.submit(graph, job_id)
+            result = self.comfy.wait_generation(prompt_id, guard, progress.heartbeat, timeout=900, interval=0.5,
+                                                events=events, on_event=progress.event)
         read = lambda node: Image.open(io.BytesIO(self.comfy.output(result, node))).convert("RGB")
         if need_pose:
             atomic_write(self.pose_dir(base_key) / "base-1024.png", png_bytes(read("43")))
             atomic_write(self.pose_dir(base_key) / "base-2k.png", png_bytes(read("42")))
-        notify("Fitting your look to the pose.", 0.85)
+        progress.stage("fitting_look", "Aligning your look and preparing the hair and clothing boundaries.")
         raw_1024, raw_2k = read("24"), read("35")
         pose = self.pose(base_key)
         edit = edit_region(pose["labels"], self.human().parse(raw_1024))

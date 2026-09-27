@@ -25,6 +25,12 @@ New onboarding selects one of five body templates from the person's saved height
 
 Scans run on a separate CPU lane in the worker, so they never wait behind someone's onboarding.
 
+## Onboarding progress and shared preparation
+
+Garment/body presets are shared across accounts and devices. They live in the worker's local disk cache, not in each phone's browser. Changing the garment graph changes its cache keys and causes one new preparation batch; an ordinary restart reuses existing presets. The worker currently prepares the catalog before consuming onboarding jobs, so an uncached batch can delay the first queued user. The Windows GPU worker must stay online for new generations.
+
+The setup screen separates that queue wait from personal likeness creation. Startup reports `preparing_catalog` and the number of prepared variants; none of the personal stages are marked complete at that point. Once claimed, the job reports selfie checking, body-template checking, reference preparation, likeness creation, larger-image preparation, alignment, and saving. Actual ComfyUI sampler events provide the image-creation step counter. If live events are unavailable, the worker continues with stage updates and heartbeats; the UI does not invent a percentage or a completion time. Elapsed time is measured from submission, and a delayed update is shown as an unconfirmed delay rather than a failed job.
+
 ## Masks
 
 `services/worker/parsing.py` runs SegFormer-B2 human parsing (`mattmdjaga/segformer_b2_clothes`, ONNX, CPU, ~1 s per image, flip-averaged). Download `onnx/model.onnx` into `comfy-identity/parsing-assets/`; it is ignored by Git. **Licence:** NVIDIA SegFormer licence, non-commercial research/evaluation only. That suits this hackathon demo; replace it before commercial use.

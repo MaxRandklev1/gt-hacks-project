@@ -45,6 +45,7 @@ MAX_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_ADAPTER_BYTES = 256 * 1024 * 1024
 SPLIT_TRAINING_STEPS = 80
 POLL_SECONDS = 1
+QUEUED_PROGRESS_INTERVAL = 10
 STYLED_TEMPLATE = ROOT / "comfy-identity/Qwen21_Garment_Styled_2K.api.json"
 SWAP_TEMPLATE = ROOT / "comfy-identity/FaceSwap_TryOn_2K.api.json"
 PERSONAL_TEMPLATE = ROOT / "comfy-identity/Qwen21_Personal_Base_2K.api.json"
@@ -295,6 +296,42 @@ class FirebaseStore:
     def garment(self, garment_id):
         return self.db.collection("garments").document(safe_id(garment_id)).get().to_dict()
 
+    def queued_enrollment_progress(self, preparation=None, *, unavailable=False):
+        """A bounded startup notice, transactionally fenced to still-unclaimed enrollment jobs."""
+        if preparation is not None:
+            completed, total = preparation.get("completed"), preparation.get("total")
+            if type(completed) is not int or type(total) is not int or not 0 <= completed <= total <= 250:
+                raise ValueError("Invalid catalog preparation counts.")
+        elif unavailable:
+            raise ValueError("Unavailable preparation requires observed counts.")
+        candidates = self.db.collection("jobs").where(filter=self.filter("status", "==", "queued")).limit(100).stream()
+        changed = 0
+        for index, candidate in enumerate(candidates):
+            if index >= 100:
+                break
+            def write(transaction):
+                job = candidate.reference.get(transaction=transaction).to_dict()
+                if (not job or job.get("status") != "queued" or job.get("kind") != "enroll"
+                        or job.get("requestVersion") != 5 or job.get("leaseOwner") or job.get("leaseToken")):
+                    return False
+                try:
+                    safe_id(job.get("uid"))
+                except ValueError:
+                    return False
+                stamp = now()
+                message = (f"Preparing shared clothing presets: {completed} of {total} ready. "
+                           "This setup is shared by everyone; your personal look has not started yet.") if preparation is not None else (
+                           "Clothing setup has finished. Waiting for the worker to start your personal look.")
+                if unavailable:
+                    message = (f"Some shared clothing presets could not be prepared: {completed} of {total} ready. "
+                               "The worker will check your selected pieces before starting your look.")
+                transaction.update(candidate.reference, {"stage": "preparing_catalog" if preparation is not None else "waiting_for_worker",
+                                   "message": message, "preparation": dict(preparation) if preparation is not None else None,
+                                   "sampling": None, "progress": None, "updatedAt": stamp, "workerSeenAt": stamp})
+                return True
+            changed += int(self.transaction(write))
+        return changed
+
     def claim(self, worker_id, kinds=None):
         candidates = self.db.collection("jobs").where(filter=self.filter("status", "==", "queued")).limit(20).stream()
         for candidate in candidates:
@@ -313,7 +350,8 @@ class FirebaseStore:
                     return None
                 token = uuid.uuid4().hex
                 updates = {"status": "running", "stage": "starting", "progress": 0.0,
-                           "message": "Local worker accepted the job.", "updatedAt": now(),
+                           "message": "Local worker accepted the job.", "updatedAt": now(), "startedAt": now(),
+                           "workerSeenAt": now(), "preparation": None, "sampling": None,
                            "leaseOwner": worker_id, "leaseToken": token,
                            "leaseExpiresAt": now() + timedelta(seconds=LEASE_SECONDS)}
                 transaction.update(candidate.reference, updates)
@@ -341,7 +379,7 @@ class FirebaseStore:
                 validate_finalize_context(uid, training_id, user, training, draft)
                 if draft != finalization["draft"]:
                     raise JobError("Your reference changed while being saved. Submit the current selfie again.")
-            updates = {"updatedAt": stamp, "leaseExpiresAt": stamp + timedelta(seconds=LEASE_SECONDS)} | (fields or {})
+            updates = {"updatedAt": stamp, "workerSeenAt": stamp, "leaseExpiresAt": stamp + timedelta(seconds=LEASE_SECONDS)} | (fields or {})
             transaction.update(reference, updates)
             if user_fields is not None:
                 transaction.update(user_ref, {"updatedAt": stamp} | user_fields)
@@ -729,17 +767,18 @@ class Worker(PersonalBaseMixin):
             body_template = select_body_template(user["heightCm"], user["weightKg"])
         except (ValueError, TypeError):
             raise JobError("Save valid height and weight measurements before finishing onboarding.") from None
-        lease.write({"stage": "checking_selfie", "message": "Checking your selfie.", "progress": 0.05})
+        lease.write({"stage": "checking_selfie", "message": "Checking that your selfie has one clear, usable face.", "progress": None, "sampling": None})
         reference_data, provenance = self.reference(job, folder)
         destinations = faceswap_paths(uid, job_id)
         reference_sha = sha256(reference_data)
         self.cache_reference(reference_sha, reference_data)
+        lease.write({"stage": "checking_catalog", "message": "Selecting your body template and checking its prepared clothing presets.", "progress": None})
         bases = {}
         for garment_id, garment in self.store.active_garments():
             catalog_paths = validate_garment(garment_id, garment, body_template["id"])
             key, outputs, base_key = self.styled_garment(
                 garment_id, garment, catalog_paths, folder, lease.guard,
-                lambda message: lease.write({"stage": "preparing_pieces", "message": message, "progress": 0.1}),
+                lambda message: lease.write({"stage": "checking_catalog", "message": message, "progress": None}),
                 allow_render=False)
             bases.setdefault(base_key, []).append((key, outputs))
         if not bases:
@@ -751,7 +790,8 @@ class Worker(PersonalBaseMixin):
             for base_key in bases:
                 p1024, p2k, hair, tee = self.personal_base(
                     uid, job_id, folder / "selfie-reference.png", base_key, lease.guard,
-                    lambda message, progress: lease.write({"stage": "creating_look", "message": message, "progress": progress}))
+                    lambda message, progress: lease.write({"stage": "creating_look", "message": message, "progress": progress}),
+                    details=lambda fields: lease.write(fields))
                 assets = {"p1024": p1024, "p2k": p2k, "hair": hair, "tee": tee}
                 self.cache_personal(uid, job_id, base_key, assets)
                 paths = personal_paths(uid, job_id, base_key)
@@ -763,7 +803,7 @@ class Worker(PersonalBaseMixin):
                     **{key: value.isoformat() if isinstance(value, datetime) else value for key, value in provenance.items()},
                     "referenceSha256": reference_sha, "personalBases": records, "bodyTemplate": body_template}
         uploads.append((destinations["manifestPath"], json.dumps(manifest).encode(), "application/json"))
-        lease.write({"stage": "saving_look", "message": "Saving your look.", "progress": 0.92})
+        lease.write({"stage": "saving_look", "message": "Saving your preview and private look files to your account.", "progress": None, "sampling": None})
         with ThreadPoolExecutor(max_workers=4) as pool:
             for upload in [pool.submit(self.store.upload, *item) for item in uploads]:
                 upload.result()
@@ -771,7 +811,7 @@ class Worker(PersonalBaseMixin):
         identity = {"status": "ready", "mode": "personal_base", "version": job_id, **destinations, **provenance,
                     "referenceSha256": reference_sha, "personalBases": records, "previewPath": preview,
                     "error": None, "updatedAt": now(), "bodyTemplate": body_template}
-        lease.write({"status": "completed", "stage": "ready", "message": "Your fitting room is ready.", "progress": 1.0},
+        lease.write({"status": "completed", "stage": "ready", "message": "Your fitting room is ready.", "progress": 1.0, "sampling": None},
                     user_fields={"identity": identity})
         # Garment masks are CPU work the first scan would otherwise pay for.
         for base_key, renders in bases.items():
@@ -853,7 +893,7 @@ class Worker(PersonalBaseMixin):
         base_file.write_text(base_key)
         return key, outputs, base_key
 
-    def prewarm(self, body_template_ids=None, garment_ids=None, *, warm_swapper=True, strict=False):
+    def prewarm(self, body_template_ids=None, garment_ids=None, *, warm_swapper=True, strict=False, notify_queued=False):
         """Prepare catalog variants and pose upscales once, without creating personal bases."""
         if body_template_ids is not None:
             body_template_ids = tuple(dict.fromkeys(body_template_ids))
@@ -865,9 +905,30 @@ class Worker(PersonalBaseMixin):
                 safe_id(garment_id)
         rendered, failures, found = [], [], set()
         pose_count, prepared_count = 0, 0
-        for garment_id, garment in self.store.active_garments():
-            if requested_garments and garment_id not in requested_garments:
-                continue
+        catalog = [(garment_id, garment) for garment_id, garment in self.store.active_garments()
+                   if not requested_garments or garment_id in requested_garments]
+        total = sum(len(body_template_ids or (BODY_TEMPLATE_IDS if "bodyBaseImagePaths" in garment else (None,)))
+                    for _, garment in catalog)
+        reported_at = float("-inf")
+
+        def report_preparation(*, finished=False):
+            nonlocal reported_at
+            if not notify_queued:
+                return
+            stamp = time.monotonic()
+            if not finished and stamp - reported_at < QUEUED_PROGRESS_INTERVAL:
+                return
+            reported_at = stamp
+            try:
+                self.store.queued_enrollment_progress(None if finished and not failures else {"completed": prepared_count, "total": total},
+                                                     unavailable=bool(finished and failures))
+            except Exception:
+                # Status delivery is best effort; it must never retry or cancel accepted GPU work.
+                logging.exception("Could not report startup preparation to queued enrollment jobs.")
+
+        report_preparation()
+        for garment_id, garment in catalog:
+            report_preparation()
             found.add(garment_id)
             variants = body_template_ids or (BODY_TEMPLATE_IDS if "bodyBaseImagePaths" in garment else (None,))
             for body_id in variants:
@@ -877,15 +938,16 @@ class Worker(PersonalBaseMixin):
                         raise JobError("ComfyUI is busy. Wait for its current work before preparing catalog variants.")
                     with tempfile.TemporaryDirectory(prefix="prewarm-", dir=self.state_dir) as folder:
                         started = time.monotonic()
-                        entry = self.styled_garment(garment_id, garment, catalog_paths, Path(folder), lambda: None,
+                        entry = self.styled_garment(garment_id, garment, catalog_paths, Path(folder), report_preparation,
                                                    lambda message, g=garment_id: logging.info("%s: %s", g, message))
                         rendered.append(entry)
                         if not self.comfy.idle():
                             raise JobError("ComfyUI became busy before pose preparation. Run preparation again when idle.")
-                        pose_count += int(self.prepare_pose(entry[2], lambda: None))
+                        pose_count += int(self.prepare_pose(entry[2], report_preparation))
                         # Masks also stay on disk so the first live scan does not parse the garment.
                         self.garment_masks(entry[0], entry[1], entry[2])
                         prepared_count += 1
+                        report_preparation()
                         logging.info("Garment %s / %s ready in %.1f s.", garment_id, body_id or "legacy", time.monotonic() - started)
                 except Exception:
                     failures.append({"garmentId": garment_id, "bodyTemplateId": body_id})
@@ -899,10 +961,11 @@ class Worker(PersonalBaseMixin):
             names = self.comfy_styled_inputs(key, outputs)
             graph = patch_swap_graph(self.swap_template, selfie_image=names[0], styled_image=names[0],
                                      styled_2k_image=names[1], job_id="prewarm-" + uuid.uuid4().hex[:12])
-            self.comfy.wait_generation(self.comfy.submit(graph, "prewarm"), lambda: None, lambda: None, timeout=300, interval=0.2)
+            self.comfy.wait_generation(self.comfy.submit(graph, "prewarm"), report_preparation, lambda: None, timeout=300, interval=0.2)
             logging.info("Face swapper warmed; %d garment(s) ready.", len(rendered))
         report = {"variantsPrepared": prepared_count,
                   "posesPrepared": pose_count, "failures": failures}
+        report_preparation(finished=True)
         if strict and failures:
             raise JobError(f"Catalog preparation failed for {len(failures)} variant(s); inspect the worker log before onboarding.")
         return report
@@ -1186,7 +1249,7 @@ def main(argv=None):
             return
         if args.pipeline == "faceswap" and not args.no_prewarm:
             try:
-                worker.prewarm()
+                worker.prewarm(notify_queued=True)
             except Exception:
                 logging.exception("Prewarm failed; new body-template looks require prepared variants. Run --prewarm-only before onboarding.")
         # Two lanes: GPU work (onboarding/training) and CPU try-on compositing, so a scan never

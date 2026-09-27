@@ -5,6 +5,7 @@ import copy
 from contextlib import ExitStack
 import json
 import hashlib
+import logging
 from pathlib import Path
 import re
 import time
@@ -19,6 +20,78 @@ IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 
 class ComfyError(RuntimeError):
     pass
+
+
+class GenerationEvents:
+    """Optional, bounded websocket observation. History remains the completion authority."""
+
+    def __init__(self, base_url, job_id):
+        self.url = base_url.replace("http://", "ws://", 1) + "/ws?clientId=" + safe_id(job_id)
+        self.origin, self.socket = base_url, None
+
+    def __enter__(self):
+        try:
+            import websocket
+            self.socket = websocket.create_connection(self.url, timeout=1, suppress_origin=True,
+                                                       http_no_proxy=["127.0.0.1", "localhost"])
+            self.socket.settimeout(0.02)
+        except Exception as error:
+            self.close()
+            logging.warning("Live image progress unavailable (%s); continuing with stage updates.", type(error).__name__)
+        return self
+
+    def close(self):
+        if self.socket is not None:
+            try:
+                self.socket.close(timeout=1)
+            except Exception:
+                pass
+            self.socket = None
+
+    def __exit__(self, *_):
+        self.close()
+
+    @staticmethod
+    def event(message, prompt_id):
+        """Keep only this prompt's node changes and real node-9 sampler counters."""
+        if not isinstance(message, dict) or not isinstance(message.get("data"), dict):
+            return None
+        data = message["data"]
+        if data.get("prompt_id") != prompt_id or not isinstance(data.get("node"), str):
+            return None
+        if message.get("type") == "executing":
+            return {"node": data["node"]}
+        if message.get("type") == "progress" and data["node"] == "9":
+            value, maximum = data.get("value"), data.get("max")
+            if type(value) is int and type(maximum) is int and 0 <= value <= maximum <= 10000 and maximum > 0:
+                return {"node": "9", "step": value, "total": maximum}
+        return None
+
+    def read(self, prompt_id):
+        if self.socket is None:
+            return []
+        events, deadline = [], time.monotonic() + 0.05
+        # Binary previews are ignored. A bounded drain yields promptly to history polling and lease checks.
+        for _ in range(64):
+            if time.monotonic() >= deadline:
+                break
+            try:
+                opcode, data = self.socket.recv_data()
+            except Exception as error:
+                if type(error).__name__ not in ("WebSocketTimeoutException", "TimeoutError", "timeout"):
+                    self.close()
+                    logging.warning("Live image progress disconnected; continuing with stage updates.")
+                    events.append({"unavailable": True})
+                break
+            if opcode != 1 or not isinstance(data, (str, bytes)) or len(data) > 65536:
+                continue
+            try:
+                event = self.event(json.loads(data), prompt_id)
+            except (ValueError, UnicodeError):
+                continue
+            if event is not None:
+                events.append(event)
+        return events
 
 
 def safe_id(value):
@@ -179,10 +252,16 @@ class ComfyClient:
                                                      "extra_data": {"firebase_job_id": job_id}})
         return result["prompt_id"]
 
-    def wait_generation(self, prompt_id, guard, progress, *, timeout=3600, interval=3.0):
+    def progress_events(self, job_id):
+        return GenerationEvents(self.base_url, job_id)
+
+    def wait_generation(self, prompt_id, guard, progress, *, timeout=3600, interval=3.0, events=None, on_event=None):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             guard()
+            if events is not None and on_event is not None:
+                for event in events.read(prompt_id):
+                    on_event(event)
             item = self.json("GET", f"/history/{safe_id(prompt_id)}").get(prompt_id)
             if item:
                 if item.get("status", {}).get("status_str") != "success":

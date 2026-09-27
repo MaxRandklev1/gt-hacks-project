@@ -16,7 +16,13 @@ export type UserProfile = {
   trainingJobId?: string;
   identity?: { status: 'selecting' | 'training' | 'awaiting_reference' | 'ready' | 'failed'; mode?: 'faceswap' | 'personal_base'; previewPath?: string; selectedPhotos?: PhotoSelection[]; error?: string; version?: string; profileId?: string; bodyTemplate?: BodyTemplateSelection };
 };
-export type Job = { id: string; uid: string; kind: 'train' | 'finalize' | 'enroll' | 'generate'; requestVersion?: number; trainingJobId?: string; status: 'queued' | 'running' | 'completed' | 'failed'; stage?: string; message?: string; progress?: number; error?: string; garmentId?: string; createdAt?: Timestamp };
+export type Job = {
+  id: string; uid: string; kind: 'train' | 'finalize' | 'enroll' | 'generate'; requestVersion?: number; trainingJobId?: string;
+  status: 'queued' | 'running' | 'completed' | 'failed'; stage?: string; message?: string; progress?: number | null;
+  error?: string; garmentId?: string; createdAt?: Timestamp; updatedAt?: Timestamp; startedAt?: Timestamp; workerSeenAt?: Timestamp;
+  preparation?: { completed: number; total: number } | null;
+  sampling?: { step: number; total: number } | null;
+};
 export type Garment = { id: string; name: string; brand?: string; description?: string; imagePath: string; baseImagePath: string; thumbnailPath?: string; active: boolean };
 export type Generation = { id: string; garmentId: string; garmentName: string; status: string; imagePath?: string; image2kPath?: string; image4kPath?: string; createdAt?: Timestamp; error?: string };
 const config = {
