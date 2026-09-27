@@ -23,14 +23,14 @@ import uuid
 from PIL import Image, ImageOps
 
 try:
-    from .body_templates import BODY_TEMPLATE_IDS, body_catalog_paths, select_body_template
+    from .body_templates import ALL_BODY_TEMPLATE_IDS, BODY_STYLES, body_catalog_paths, select_body_template
     from .comfy import ComfyClient, ComfyError, LocalProfiles, patch_graph, patch_personal_graph, patch_styled_graph, patch_swap_graph, safe_id
     from .parsing import DEFAULT_MODEL as PARSING_MODEL
     from .personal import CompositeError, PersonalBaseMixin, personal_paths
     from .photo_selection import select_best_photos
     from .selfie import validate_selfie
 except ImportError:
-    from body_templates import BODY_TEMPLATE_IDS, body_catalog_paths, select_body_template
+    from body_templates import ALL_BODY_TEMPLATE_IDS, BODY_STYLES, body_catalog_paths, select_body_template
     from comfy import ComfyClient, ComfyError, LocalProfiles, patch_graph, patch_personal_graph, patch_styled_graph, patch_swap_graph, safe_id
     from parsing import DEFAULT_MODEL as PARSING_MODEL
     from personal import CompositeError, PersonalBaseMixin, personal_paths
@@ -220,6 +220,14 @@ def validate_garment(garment_id, garment, body_template_id=None):
     return expected
 
 
+def configured_body_templates(garment):
+    """Every template this garment publishes (male, plus female once seeded), or the legacy base."""
+    paths = garment.get("bodyBaseImagePaths") if isinstance(garment, dict) else None
+    if not isinstance(paths, dict):
+        return (None,)
+    return tuple(key for key in ALL_BODY_TEMPLATE_IDS if key in paths)
+
+
 def saved_body_template(identity):
     """Use the enrollment snapshot, never later edits to the account's measurements."""
     if "bodyTemplate" not in identity:
@@ -229,7 +237,7 @@ def saved_body_template(identity):
         raise JobError("Your saved body template is incomplete. Set up your look again.")
     try:
         expected = select_body_template(snapshot.get("heightCm"), snapshot.get("weightKg"),
-                                        policy_version=snapshot.get("policyVersion"))
+                                        policy_version=snapshot.get("policyVersion"), style=snapshot.get("bodyStyle", "male"))
     except (ValueError, TypeError):
         raise JobError("Your saved measurements are invalid. Set up your look again.") from None
     if any(snapshot.get(key) != value for key, value in expected.items()):
@@ -763,8 +771,11 @@ class Worker(PersonalBaseMixin):
                 or type(user.get("weightKg")) not in (int, float) or not 25 <= user["weightKg"] <= 300
                 or user.get("measurementSystem") not in ("us", "metric")):
             raise JobError("Save your height and weight before finishing onboarding.")
+        style = user.get("bodyStyle", "male")  # Profiles saved before the male/female choice keep the male set.
+        if style not in BODY_STYLES:
+            raise JobError("Choose male or female with your height and weight before finishing onboarding.")
         try:
-            body_template = select_body_template(user["heightCm"], user["weightKg"])
+            body_template = select_body_template(user["heightCm"], user["weightKg"], style=style)
         except (ValueError, TypeError):
             raise JobError("Save valid height and weight measurements before finishing onboarding.") from None
         lease.write({"stage": "checking_selfie", "message": "Checking that your selfie has one clear, usable face.", "progress": None, "sampling": None})
@@ -897,7 +908,7 @@ class Worker(PersonalBaseMixin):
         """Prepare catalog variants and pose upscales once, without creating personal bases."""
         if body_template_ids is not None:
             body_template_ids = tuple(dict.fromkeys(body_template_ids))
-            if not body_template_ids or any(value not in BODY_TEMPLATE_IDS for value in body_template_ids):
+            if not body_template_ids or any(value not in ALL_BODY_TEMPLATE_IDS for value in body_template_ids):
                 raise JobError("Choose one or more configured body template IDs.")
         requested_garments = set(garment_ids) if garment_ids else None
         if requested_garments:
@@ -907,8 +918,7 @@ class Worker(PersonalBaseMixin):
         pose_count, prepared_count = 0, 0
         catalog = [(garment_id, garment) for garment_id, garment in self.store.active_garments()
                    if not requested_garments or garment_id in requested_garments]
-        total = sum(len(body_template_ids or (BODY_TEMPLATE_IDS if "bodyBaseImagePaths" in garment else (None,)))
-                    for _, garment in catalog)
+        total = sum(len(body_template_ids or configured_body_templates(garment)) for _, garment in catalog)
         reported_at = float("-inf")
 
         def report_preparation(*, finished=False):
@@ -930,7 +940,7 @@ class Worker(PersonalBaseMixin):
         for garment_id, garment in catalog:
             report_preparation()
             found.add(garment_id)
-            variants = body_template_ids or (BODY_TEMPLATE_IDS if "bodyBaseImagePaths" in garment else (None,))
+            variants = body_template_ids or configured_body_templates(garment)
             for body_id in variants:
                 try:
                     catalog_paths = validate_garment(garment_id, garment, body_id)
@@ -1209,7 +1219,7 @@ def main(argv=None):
                         help="faceswap (default): cached garment render + selfie face swap in seconds. qwen: earlier trained-adapter diffusion path.")
     parser.add_argument("--no-prewarm", action="store_true", help="Skip rendering uncached active garments and warming the face swapper at startup.")
     parser.add_argument("--prewarm-only", action="store_true", help="Prepare garment/body variants and fixed-pose upscales, then exit without consuming user jobs.")
-    parser.add_argument("--body-template", action="append", choices=BODY_TEMPLATE_IDS,
+    parser.add_argument("--body-template", action="append", choices=ALL_BODY_TEMPLATE_IDS,
                         help="With --prewarm-only: prepare only this body template; repeat to choose several.")
     parser.add_argument("--garment", action="append", help="With --prewarm-only: prepare only this active garment ID; repeat to choose several.")
     args = parser.parse_args(argv)

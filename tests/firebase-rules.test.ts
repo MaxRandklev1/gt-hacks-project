@@ -121,6 +121,13 @@ describe('Firestore ownership and protected fields', () => {
     await assertFails(dbFor(BOB).doc(`users/${ALICE}`).update({ measurementSystem: 'metric', updatedAt: stamp() }));
   });
 
+  it('accepts only male or female as the body style', async () => {
+    await seed({ [`users/${ALICE}`]: userData() });
+    const profile = dbFor().doc(`users/${ALICE}`);
+    await assertSucceeds(profile.update({ bodyStyle: 'female', updatedAt: stamp() }));
+    await assertSucceeds(profile.update({ bodyStyle: 'male', updatedAt: stamp() }));
+    for (const bodyStyle of ['other', 'MALE', 1, null]) await assertFails(profile.update({ bodyStyle, updatedAt: stamp() }));
+  });
   it.each(['imperial', 'US', 1, null])('rejects unsupported measurement preference %s on create and update', async measurementSystem => {
     const profile = dbFor().doc(`users/${ALICE}`);
     await assertFails(profile.set({ ...userData(), measurementSystem }));

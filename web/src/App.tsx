@@ -197,7 +197,9 @@ function App() {
   const screen: Screen = preview ? previewScreen : authLoading ? 'loading' : !user ? 'welcome' : !setupLoaded ? 'loading' : editingProfile && phase ? phase : reviewingLook ? 'home' : ready ? view : phase || (setup.screen === 'ready' ? view : setup.screen);
   const firstName = user?.displayName?.trim().split(/\s+/)[0] || 'there';
   const isMain = ['home', 'scanner', 'gallery', 'detail', 'account'].includes(screen);
-  const measurementValid = measurementsValid(measurements);
+  const [bodyStyle, setBodyStyle] = useState<'male' | 'female' | undefined>();
+  useEffect(() => { setBodyStyle(profile?.bodyStyle); }, [profile?.bodyStyle]);
+  const measurementValid = measurementsValid(measurements) && Boolean(bodyStyle);
   const accountBodyNote = preview
     ? 'Height and weight help select the closest of five body templates. This is an approximate appearance preview, not an exact fit prediction.'
     : profile?.identity?.bodyTemplate?.policyVersion === 'bmi-visual-v2'
@@ -229,7 +231,7 @@ function App() {
     const epoch = sessionEpoch.current;
     setBusy(true); setError('');
     try {
-      const saved = { heightCm: measurements.heightCm!, weightKg: measurements.weightKg!, measurementSystem: measurements.system };
+      const saved = { heightCm: measurements.heightCm!, weightKg: measurements.weightKg!, measurementSystem: measurements.system, bodyStyle: bodyStyle! };
       await saveMeasurements(saved);
       if (sessionEpoch.current !== epoch) return;
       setProfile(current => current ? { ...current, ...saved } : current);
@@ -338,7 +340,7 @@ function App() {
         <section className="onboarding-card">
           {screen === 'measurements' && <>
             <div className="step-kicker">STEP 01 <span>/ 03</span></div><h2>First, a little<br />about you.</h2><p className="section-description">Just two details to make your profile yours.</p>
-            <div className="measurement-system" role="group" aria-label="Measurement units"><button type="button" aria-pressed={measurements.system === 'us'} onClick={() => setMeasurements(current => switchMeasurementSystem(current, 'us'))}>US <span>ft / lb</span></button><button type="button" aria-pressed={measurements.system === 'metric'} onClick={() => setMeasurements(current => switchMeasurementSystem(current, 'metric'))}>Metric <span>cm / kg</span></button></div>
+            <div className="body-style" role="group" aria-label="Body style"><span className="body-style-label">Body style</span><div className="measurement-system"><button type="button" aria-pressed={bodyStyle === 'male'} onClick={() => setBodyStyle('male')}>Male</button><button type="button" aria-pressed={bodyStyle === 'female'} onClick={() => setBodyStyle('female')}>Female</button></div></div><div className="measurement-system" role="group" aria-label="Measurement units"><button type="button" aria-pressed={measurements.system === 'us'} onClick={() => setMeasurements(current => switchMeasurementSystem(current, 'us'))}>US <span>ft / lb</span></button><button type="button" aria-pressed={measurements.system === 'metric'} onClick={() => setMeasurements(current => switchMeasurementSystem(current, 'metric'))}>Metric <span>cm / kg</span></button></div>
             <form onSubmit={event => { event.preventDefault(); void continueMeasurements(); }}>
               {measurements.system === 'us' ? <div className="measurement-fields us-measurements">
                 <fieldset className="height-field"><legend>Height</legend><div className="height-inputs"><label className="unit-input"><span className="sr-only">Height in feet</span><input type="number" inputMode="numeric" min="0" max="8" step="1" placeholder="5" aria-label="Height in feet" value={measurements.fields.feet} onChange={event => setMeasurements(current => editMeasurement(current, 'feet', event.target.value))} required={!preview} /><span>ft</span></label><label className="unit-input"><span className="sr-only">Additional inches</span><input type="number" inputMode="decimal" min="0" max="11.9" step="0.1" placeholder="10" aria-label="Additional inches" value={measurements.fields.inches} onChange={event => setMeasurements(current => editMeasurement(current, 'inches', event.target.value))} /><span>in</span></label></div></fieldset>
@@ -347,7 +349,7 @@ function App() {
                 <label>Height<div className="unit-input"><input type="number" inputMode="decimal" min="80" max="250" step="0.1" placeholder="175" value={measurements.fields.centimeters} onChange={event => setMeasurements(current => editMeasurement(current, 'centimeters', event.target.value))} required={!preview} /><span>cm</span></div></label>
                 <label>Weight<div className="unit-input"><input type="number" inputMode="decimal" min="25" max="300" step="0.1" placeholder="70" value={measurements.fields.kilograms} onChange={event => setMeasurements(current => editMeasurement(current, 'kilograms', event.target.value))} required={!preview} /><span>kg</span></div></label>
               </div>}
-              <div className="info-note"><Icon name="user" size={19} /><p>Height and weight help select the closest of five body templates. Your try-on is an approximate appearance preview, not an exact body measurement or clothing-fit prediction.</p></div><button type="submit" className="button button-ink full-width" disabled={!preview && (!measurementValid || busy)}>{busy ? 'Saving details…' : 'Next: your selfie'} <Icon name="arrow" /></button>
+              <div className="info-note"><Icon name="user" size={19} /><p>Body style, height and weight select the closest of five body templates. Your try-on is an approximate appearance preview, not an exact body measurement or clothing-fit prediction.</p></div><button type="submit" className="button button-ink full-width" disabled={!preview && (!measurementValid || busy)}>{busy ? 'Saving details…' : 'Next: your selfie'} <Icon name="arrow" /></button>
             </form><p className="form-footnote">Switch units at any time. Your measurements stay the same.</p>
           </>}
           {screen === 'selfie' && <>

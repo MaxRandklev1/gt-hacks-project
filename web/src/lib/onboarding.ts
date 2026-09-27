@@ -2,7 +2,7 @@ import type { Job, UserProfile } from './client';
 import { validateMeasurements } from './validation';
 
 export function savedMeasurementsValid(profile: UserProfile | null) {
-  if (!profile || !['us', 'metric'].includes(profile.measurementSystem || '')) return false;
+  if (!profile || !['us', 'metric'].includes(profile.measurementSystem || '') || !['male', 'female'].includes(profile.bodyStyle || '')) return false;
   try { validateMeasurements(profile.heightCm!, profile.weightKg!); return true; } catch { return false; }
 }
 

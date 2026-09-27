@@ -19,10 +19,10 @@ from PIL import Image, ImageOps
 
 try:
     from .comfy import safe_id
-    from .body_templates import BODY_TEMPLATE_IDS, body_catalog_paths, body_template_source
+    from .body_templates import BODY_STYLE_TEMPLATE_IDS, body_catalog_paths, body_style, body_template_source
 except ImportError:
     from comfy import safe_id
-    from body_templates import BODY_TEMPLATE_IDS, body_catalog_paths, body_template_source
+    from body_templates import BODY_STYLE_TEMPLATE_IDS, body_catalog_paths, body_style, body_template_source
 
 
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
@@ -168,7 +168,7 @@ def _identical_blob(blob, data):
     return len(existing) == len(data) and hmac.compare_digest(hashlib.sha256(existing).digest(), hashlib.sha256(data).digest())
 
 
-def seed_body_templates(db, bucket, *, directory, garment_ids):
+def seed_body_templates(db, bucket, *, directory, garment_ids, style="male"):
     """Publish five validated templates for explicit existing garments, without invalidating old renders.
 
 Preflight all local files, documents and existing objects before writing anything. Object
@@ -178,8 +178,9 @@ A repeated identical call performs no writes. Partial storage failures can be re
     ids = list(dict.fromkeys(catalog_id(value) for value in garment_ids))
     if not ids or len(ids) > 100:
         raise ValueError("Choose between one and 100 explicit garment IDs.")
-    images = {key: normalized_png(body_template_source(directory, index))
-              for index, key in enumerate(BODY_TEMPLATE_IDS, start=1)}
+    template_ids = BODY_STYLE_TEMPLATE_IDS[body_style(style)]
+    images = {key: normalized_png(body_template_source(directory, index, style))
+              for index, key in enumerate(template_ids, start=1)}
     if len({size for _, size in images.values()}) != 1:
         raise ValueError("All five body templates must use the same image dimensions.")
 
@@ -197,8 +198,11 @@ A repeated identical call performs no writes. Partial storage failures can be re
         legacy = bucket.get_blob(f"{prefix}/base.png")
         if legacy is None:
             raise ValueError(f"Garment {garment_id} is missing its original base image.")
-        reuse_middle = _identical_blob(legacy, images["weight-3"][0])
-        paths = {}
+        reuse_middle = "weight-3" in images and _identical_blob(legacy, images["weight-3"][0])
+        # Merge into the existing map so publishing one style keeps the other style's entries.
+        existing_paths = garment.get("bodyBaseImagePaths") if isinstance(garment.get("bodyBaseImagePaths"), dict) else {}
+        other_style = {key for ids in BODY_STYLE_TEMPLATE_IDS.values() for key in ids} - set(template_ids)
+        paths = {key: value for key, value in existing_paths.items() if key in other_style}  # Obsolete keys drop.
         for key, (data, _) in images.items():
             path = f"{prefix}/base.png" if key == "weight-3" and reuse_middle else f"{prefix}/body-bases/{key}.png"
             paths[key] = path
@@ -209,7 +213,7 @@ A repeated identical call performs no writes. Partial storage failures can be re
                 uploads[path] = data
             elif not _identical_blob(existing, data):
                 raise ValueError(f"Catalog image {path} exists with different bytes; no object was overwritten.")
-        body_catalog_paths(garment_id, garment | {"bodyBaseImagePaths": paths}, "weight-3")
+        body_catalog_paths(garment_id, garment | {"bodyBaseImagePaths": paths}, template_ids[2])
         plans.append((garment_id, reference, paths, garment.get("bodyBaseImagePaths") != paths))
 
     for path, data in uploads.items():
@@ -244,8 +248,10 @@ def main(argv=None):
     seed.add_argument("--description", default="")
     seed.add_argument("--reference", type=Path, required=True)
     seed.add_argument("--base", type=Path, required=True)
-    bodies = sub.add_parser("seed-body-templates", help="Publish the original five Pose1_WeightN.png (or renamed _Male.png) templates.")
+    bodies = sub.add_parser("seed-body-templates", help="Publish five body templates: male Pose1_WeightN.png (or _Male.png) or female Pose1_WeightN_Female.png.")
     bodies.add_argument("--directory", type=Path, required=True)
+    bodies.add_argument("--style", choices=("male", "female"), default="male",
+                        help="female publishes Pose1_WeightN_Female.png as female-weight-N; the male set must already exist.")
     bodies.add_argument("garment_ids", nargs="+", type=catalog_id)
     cors = sub.add_parser("configure-cors", help="Replace the bucket's read-only browser CORS allowlist.")
     cors.add_argument("--origin", type=normalize_origin, action="append", required=True)
@@ -258,7 +264,7 @@ def main(argv=None):
                 result = seed_garment(db, bucket, garment_id=args.id, name=args.name, brand=args.brand,
                                       description=args.description, reference=args.reference, base=args.base)
             elif args.command == "seed-body-templates":
-                result = seed_body_templates(db, bucket, directory=args.directory, garment_ids=args.garment_ids)
+                result = seed_body_templates(db, bucket, directory=args.directory, garment_ids=args.garment_ids, style=args.style)
             else:
                 result = configure_cors(bucket, args.origin)
         print(json.dumps({"project": args.project, "bucket": args.bucket, **result}, indent=2))

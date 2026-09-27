@@ -12,7 +12,7 @@ export type BodyTemplateSelection = {
   bmi: number; heightCm: number; weightKg: number; policyVersion: 'bmi-visual-v1' | 'bmi-visual-v2';
 };
 export type UserProfile = {
-  displayName?: string; email?: string; photoURL?: string; heightCm?: number; weightKg?: number; measurementSystem?: 'us' | 'metric';
+  displayName?: string; email?: string; photoURL?: string; heightCm?: number; weightKg?: number; measurementSystem?: 'us' | 'metric'; bodyStyle?: 'male' | 'female';
   trainingJobId?: string;
   identity?: { status: 'selecting' | 'training' | 'awaiting_reference' | 'ready' | 'failed'; mode?: 'faceswap' | 'personal_base'; previewPath?: string; selectedPhotos?: PhotoSelection[]; error?: string; version?: string; profileId?: string; bodyTemplate?: BodyTemplateSelection };
 };
@@ -176,9 +176,10 @@ async function cleanPhoto(file: File): Promise<Blob> {
     return await new Promise<Blob>((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('Could not prepare this photo.')), 'image/jpeg', 0.94));
   } finally { bitmap.close(); }
 }
-export async function saveMeasurements(input: { heightCm: number; weightKg: number; measurementSystem: 'us' | 'metric' }) {
+export async function saveMeasurements(input: { heightCm: number; weightKg: number; measurementSystem: 'us' | 'metric'; bodyStyle: 'male' | 'female' }) {
   validateMeasurements(input.heightCm, input.weightKg);
   if (!['us', 'metric'].includes(input.measurementSystem)) throw new Error('Choose US or metric measurements.');
+  if (!['male', 'female'].includes(input.bodyStyle)) throw new Error('Choose male or female.');
   const { db, user } = signedIn();
   await runTransaction(db, async tx => {
     assertAccount(user.uid);

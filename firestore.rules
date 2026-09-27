@@ -19,7 +19,7 @@ service cloud.firestore {
             && data.selfieCapturedAt <= data.selfieSelectedAt)
           || (data.selfieSource == 'upload' && !('selfieCapturedAt' in data)));
     }
-    function userFields() { return ['displayName','email','photoURL','heightCm','weightKg','measurementSystem','consentVersion','consentAt','createdAt','updatedAt']; }
+    function userFields() { return ['displayName','email','photoURL','heightCm','weightKg','measurementSystem','bodyStyle','consentVersion','consentAt','createdAt','updatedAt']; }
     function validUser(data) {
       return data.displayName is string && data.displayName.size() <= 200
         && data.email is string && data.email.size() <= 320
@@ -27,6 +27,7 @@ service cloud.firestore {
         && data.updatedAt == request.time
         && ((!('heightCm' in data) && !('weightKg' in data)) || validMeasurements(data))
         && (!('measurementSystem' in data) || data.measurementSystem in ['us','metric'])
+        && (!('bodyStyle' in data) || data.bodyStyle in ['male','female'])
         && (!('consentVersion' in data) || (data.consentVersion == 'identity-training-v1' && data.consentAt is timestamp));
     }
     match /users/{uid} {

@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { onboardingProgress, needsPersonalLookReview, readOnboardingChoices, saveOnboardingChoices } from '../web/src/lib/onboarding';
+import { onboardingProgress, savedMeasurementsValid, needsPersonalLookReview, readOnboardingChoices, saveOnboardingChoices } from '../web/src/lib/onboarding';
 import type { Job, UserProfile } from '../web/src/lib/client';
 
-const measurements = { heightCm: 178, weightKg: 70, measurementSystem: 'us' as const };
+const measurements = { heightCm: 178, weightKg: 70, measurementSystem: 'us' as const, bodyStyle: 'male' as const };
 const enroll: Job = { id: 'enroll-1', uid: 'person', kind: 'enroll', requestVersion: 5, status: 'running' };
 
 describe('Selfie-only onboarding', () => {
@@ -93,5 +93,15 @@ describe('Personal-look review and account-specific choices', () => {
     expect(readOnboardingChoices('alice', { getItem: () => '{"pendingLookReview": 42}' }).pendingLookReview).toBeUndefined();
     expect(readOnboardingChoices('alice', { getItem: () => { throw new Error('blocked'); } })).toEqual({});
     expect(() => saveOnboardingChoices('alice', {}, { setItem: () => { throw new Error('blocked'); } })).not.toThrow();
+  });
+});
+
+describe('Body style choice', () => {
+  it('requires male or female alongside height, weight and units', () => {
+    expect(savedMeasurementsValid(measurements)).toBe(true);
+    expect(savedMeasurementsValid({ ...measurements, bodyStyle: 'female' })).toBe(true);
+    const { bodyStyle: _omitted, ...withoutStyle } = measurements;
+    expect(savedMeasurementsValid(withoutStyle)).toBe(false);
+    expect(savedMeasurementsValid({ ...measurements, bodyStyle: 'other' as never })).toBe(false);
   });
 });

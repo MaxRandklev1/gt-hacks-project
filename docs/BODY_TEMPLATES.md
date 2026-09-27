@@ -1,6 +1,6 @@
 # Body templates selected from height and weight
 
-New single-selfie onboarding selects one of the original five templates, now named `ClothesSwap/Pose1_WeightN_Male.png`. Renaming these files did not change the published image content or routing. The separate `_Female.png` files are not used by this rollout. The worker computes BMI from the saved metric values:
+Onboarding asks for a **body style (male or female)** alongside height and weight, saved as `bodyStyle` on the profile. The worker then selects one of five templates of that style: male `weight-1`–`weight-5` (`ClothesSwap/Pose1_WeightN_Male.png`) or female `female-weight-1`–`female-weight-5` (`ClothesSwap/Pose1_WeightN_Female.png`). Both styles use the same BMI ranges below for their numbered images, which assumes each set's images are ordered the same way. The worker computes BMI from the saved metric values:
 
 ```text
 BMI = weightKg / (heightCm / 100)²
@@ -18,6 +18,8 @@ The existing US inputs convert total feet/inches to centimetres with 2.54 and po
 
 Policy `bmi-visual-v2` raises every original visual cutoff by 10%, from `(18.5, 22, 25, 30)` to `(20.35, 24.2, 27.5, 33)`. The owner's reference of 5 ft 8 in and 170 lb converts to 172.72 cm and 77.1107029 kg, with BMI 25.848146310263207, near the midpoint of template 3's revised range. The [BMI calculation](https://www.cdc.gov/bmi/adult-calculator/bmi-categories.html) and stored measurements remain unchanged; only the mapping to these particular images changes. These are application-specific visual ranges, not clinical BMI categories. BMI does not uniquely determine proportions, muscle mass, or clothing fit; the resulting image is an approximate appearance preview. The UI uses neutral wording and does not label the person's body or health.
 
+Profiles saved before the choice existed have no `bodyStyle`; the worker treats them as male, and the app sends anyone not yet set up back to the details step to choose. Male snapshots omit `bodyStyle`, so every identity saved before this change still validates unchanged; female snapshots record `bodyStyle: "female"`.
+
 ## Identity and garment alignment
 
 - The server chooses the template. Browser requests cannot submit a template ID, alternative file path, or model setting.
@@ -31,7 +33,7 @@ Policy `bmi-visual-v2` raises every original visual cutoff by 10%, from `(18.5, 
 
 ## Catalog and cache preparation
 
-The operator publishes the five templates onto explicitly named existing garment entries:
+The operator publishes the five male templates onto explicitly named existing garment entries:
 
 ```powershell
 $env:GOOGLE_APPLICATION_CREDENTIALS = 'C:/private/firebase-worker-service-account.json'
@@ -41,7 +43,9 @@ services/worker/.venv/Scripts/python.exe -m services.worker.catalog seed-body-te
   --directory ClothesSwap demo-shirt thread-1 thread-2 thread-3
 ```
 
-For each number, the command accepts the original `Pose1_WeightN.png` filename first, otherwise `Pose1_WeightN_Male.png`. If both exist, the original filename takes precedence. It never automatically substitutes a `_Female.png` file. The local pose utilities use this same resolution rule.
+The female set is published the same way, after the male set, with `--style female` (`seed-body-templates --directory ClothesSwap --style female demo-shirt thread-1 thread-2 thread-3`). It creates `garments/{garmentId}/body-bases/female-weight-N.png` and adds those five keys to the same `bodyBaseImagePaths` map, keeping the male entries. A garment's female set is optional, but when present it must be complete. Restarting the worker, or `--prewarm-only`, renders the missing female presets on the fast turbo graph (~30 s each).
+
+For male templates, the command accepts the original `Pose1_WeightN.png` filename first, otherwise `Pose1_WeightN_Male.png`. If both exist, the original filename takes precedence. It never automatically substitutes a `_Female.png` file. The local pose utilities use this same resolution rule.
 
 The command checks all five images and all target paths before writing. It creates metadata-stripped PNGs at `garments/{garmentId}/body-bases/weight-N.png`, or verifies identical existing bytes. When template 3 matches the existing `base.png`, its map entry reuses that path. Each garment gets a complete `bodyBaseImagePaths` map and a separate `bodyTemplatesUpdatedAt` timestamp. The garment's original paths and `updatedAt` remain unchanged, preserving the legacy cache keys. Repeating the same publication is a no-op.
 

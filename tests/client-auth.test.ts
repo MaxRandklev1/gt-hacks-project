@@ -147,7 +147,7 @@ describe('Authentication return and account boundaries', () => {
     mocks.transaction.mockImplementation(async (_db, update) => update({ get: async () => { mocks.auth.currentUser = userB; return {}; }, set: write }));
     mocks.auth.currentUser = userA;
     const { saveMeasurements } = await import('../web/src/lib/client');
-    await expect(saveMeasurements({ heightCm: 178, weightKg: 70, measurementSystem: 'us' })).rejects.toThrow(/account changed/i);
+    await expect(saveMeasurements({ heightCm: 178, weightKg: 70, measurementSystem: 'us', bodyStyle: 'male' })).rejects.toThrow(/account changed/i);
     expect(write).not.toHaveBeenCalled();
   });
 
@@ -156,9 +156,9 @@ describe('Authentication return and account boundaries', () => {
     mocks.transaction.mockImplementation(async (_db, update) => update({ get: async () => ({}), set: write }));
     mocks.auth.currentUser = userA;
     const { saveMeasurements } = await import('../web/src/lib/client');
-    await saveMeasurements({ heightCm: 177.8, weightKg: 68.04, measurementSystem: 'us' });
+    await saveMeasurements({ heightCm: 177.8, weightKg: 68.04, measurementSystem: 'us', bodyStyle: 'female' });
     expect(write).toHaveBeenCalledTimes(1);
-    expect(write).toHaveBeenCalledWith(expect.objectContaining({ path: 'users/account-a' }), { heightCm: 177.8, weightKg: 68.04, measurementSystem: 'us', updatedAt: 'timestamp' }, { merge: true });
+    expect(write).toHaveBeenCalledWith(expect.objectContaining({ path: 'users/account-a' }), { heightCm: 177.8, weightKg: 68.04, measurementSystem: 'us', bodyStyle: 'female', updatedAt: 'timestamp' }, { merge: true });
   });
 
   it('reuses an in-flight try-on of the same garment and queues new requests as version 5', async () => {

@@ -24,3 +24,7 @@
 .your-look.is-review { flex-direction: column; align-items: stretch; }
 .your-look.is-review .your-look-image { width: 100%; height: auto; max-height: 520px; object-fit: contain; }
 .your-look.is-review .button { margin: 10px 0; }
+
+.body-style { margin: 18px 0 10px; }
+.body-style-label { display: block; font-size: 11px; font-weight: 500; margin-bottom: 8px; }
+.body-style .measurement-system { margin-top: 0; }
