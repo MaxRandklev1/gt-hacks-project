@@ -200,3 +200,58 @@ describe('Authentication return and account boundaries', () => {
     expect(write.mock.calls.map(call => call[1]).find(data => data.kind === 'generate')).toMatchObject({ garmentId: 'tee', requestVersion: 5 });
   });
 });
+
+describe('Saved piece transactions and account boundaries', () => {
+  const generation = { id: 'finished-look', garmentId: 'tee', garmentName: 'Tee', status: 'completed' };
+  const target = { path: 'users/account-a/piecePreferences/tee', id: 'tee' };
+
+  it.each([
+    ['dislike', { reaction: 'like', wishlist: true }, { reaction: 'dislike', wishlist: true }],
+    ['wishlist', { reaction: 'dislike', wishlist: true }, { reaction: 'dislike', wishlist: false }],
+  ] as const)('reads the current preference transactionally and preserves the other choice when applying %s', async (action, current, expected) => {
+    const read = vi.fn(async () => ({ exists: () => true, data: () => current }));
+    const write = vi.fn();
+    mocks.transaction.mockImplementation(async (_db, update) => update({ get: read, set: write }));
+    mocks.auth.currentUser = userA;
+    const { savePieceAction } = await import('../web/src/lib/client');
+
+    await savePieceAction(generation, action);
+
+    expect(read).toHaveBeenCalledExactlyOnceWith(target);
+    expect(mocks.getDoc).not.toHaveBeenCalled();
+    expect(write).toHaveBeenCalledExactlyOnceWith(target, {
+      ...expected, generationId: generation.id, updatedAt: 'timestamp',
+    });
+  });
+
+  it('does not write a preference when the account changes during its transaction read', async () => {
+    const pending = deferred<unknown>();
+    const read = vi.fn(() => pending.promise);
+    const write = vi.fn();
+    mocks.transaction.mockImplementation(async (_db, update) => update({ get: read, set: write }));
+    mocks.auth.currentUser = userA;
+    const { savePieceAction } = await import('../web/src/lib/client');
+    const saving = savePieceAction(generation, 'like');
+    expect(read).toHaveBeenCalledWith(target);
+
+    mocks.auth.currentUser = userB;
+    pending.resolve({ exists: () => true, data: () => ({ reaction: 'none', wishlist: true }) });
+
+    await expect(saving).rejects.toThrow(/account changed/i);
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it('does not return a saved generation fetched for the previous account', async () => {
+    const pending = deferred<unknown>();
+    mocks.getDoc.mockReturnValue(pending.promise);
+    mocks.auth.currentUser = userA;
+    const { getSavedGeneration } = await import('../web/src/lib/client');
+    const loading = getSavedGeneration(generation.id);
+    expect(mocks.getDoc).toHaveBeenCalledWith({ path: 'users/account-a/generations/finished-look', id: generation.id });
+
+    mocks.auth.currentUser = userB;
+    pending.resolve({ exists: () => true, id: generation.id, data: () => generation });
+
+    await expect(loading).rejects.toThrow(/account changed/i);
+  });
+});

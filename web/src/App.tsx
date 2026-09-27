@@ -3,6 +3,7 @@ import {
   firebaseConfigured, signInWithGoogle, signOut, subscribeAuth, subscribeProfile,
   subscribeJobs, subscribeGenerations, getGarment, getPrivateImage,
   startEnrollment, saveMeasurements, requestGeneration,
+  subscribePiecePreferences, getSavedGeneration, savePieceAction,
   type SessionUser, type UserProfile, type Job, type Garment, type Generation,
 } from './lib/client';
 import { parseGarmentCode, readPendingGarment, rememberGarment, clearPendingGarment } from './lib/qr';
@@ -12,6 +13,9 @@ import { GarmentCatalog } from './components/GarmentCatalog';
 import { SelfieCapture, type CapturedSelfie } from './components/SelfieCapture';
 import { EnrollmentProgress } from './components/EnrollmentProgress';
 import { HomepageVideo } from './components/HomepageVideo';
+import { PieceActions } from './components/PieceActions';
+import { LooksMenu } from './components/LooksMenu';
+import { filterLooks, looksFilters, type PiecePreference, type PieceAction, type LooksFilter } from './lib/piece-preferences';
 import { createMeasurements, editMeasurement, formatHeight, formatWeight, measurementsValid, switchMeasurementSystem } from './lib/measurements';
 import { validateReferenceSelfie } from './lib/validation';
 import { onboardingProgress, replacementSetupScreen, readOnboardingChoices, saveOnboardingChoices, type OnboardingChoices } from './lib/onboarding';
@@ -70,6 +74,17 @@ function App() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [jobsLoading, setJobsLoading] = useState(false);
   const [generations, setGenerations] = useState<Generation[]>([]);
+  const [piecePreferences, setPiecePreferences] = useState<PiecePreference[]>([]);
+  const [preferencesLoaded, setPreferencesLoaded] = useState(false);
+  const [preferencesError, setPreferencesError] = useState('');
+  const [preferencesRetry, setPreferencesRetry] = useState(0);
+  const [savedGenerations, setSavedGenerations] = useState<Generation[]>([]);
+  const [savedLoading, setSavedLoading] = useState(false);
+  const [savedError, setSavedError] = useState('');
+  const [savedRetry, setSavedRetry] = useState(0);
+  const [savingPiece, setSavingPiece] = useState<string>();
+  const [pieceNotice, setPieceNotice] = useState('');
+  const [looksFilter, setLooksFilter] = useState<LooksFilter>('all');
   const [view, setView] = useState<View>('scanner');
   const [compactPicker, setCompactPicker] = useState(() => window.matchMedia('(max-width: 820px)').matches);
   useEffect(() => {
@@ -114,6 +129,9 @@ function App() {
       setUser(next); setAuthLoading(false); setProfileLoading(Boolean(next)); setJobsLoading(Boolean(next));
       setAccountError(''); setError(''); setNotice('');
       setProfile(null); setJobs([]); setGenerations([]); setSelectedGeneration(null);
+      setPiecePreferences([]); setPreferencesLoaded(false); setSavedGenerations([]);
+      setPreferencesError('');
+      setSavedLoading(false); setSavedError(''); setSavingPiece(undefined); setPieceNotice(''); setLooksFilter('all');
       setConsent(false); setMeasurements(createMeasurements()); setBodyStyle(undefined); setSelfie(null);
       setSubmittedSelfieUrl(undefined);
       setOnboardingChoices(next ? readOnboardingChoices(next.uid) : {});
@@ -149,6 +167,39 @@ function App() {
     ];
     return () => { active = false; stops.forEach(stop => stop()); };
   }, [user?.uid, authLoading, authRetry]);
+
+  useEffect(() => {
+    if (!user || authLoading) return;
+    let active = true;
+    const uid = user.uid;
+    setPreferencesLoaded(false); setPreferencesError('');
+    const stop = subscribePiecePreferences(uid, next => {
+      if (active && sessionUid.current === uid) { setPiecePreferences(next); setPreferencesLoaded(true); }
+    }, () => {
+      if (active && sessionUid.current === uid) {
+        setPreferencesLoaded(false);
+        setPreferencesError('Your saved choices could not connect. Reconnect to like pieces or update your wish list.');
+      }
+    });
+    return () => { active = false; stop(); };
+  }, [user?.uid, authLoading, preferencesRetry]);
+
+  useEffect(() => {
+    if (!user || authLoading || !preferencesLoaded) return;
+    let current = true;
+    const uid = user.uid;
+    const recent = new Set(generations.map(item => item.id));
+    const missing = [...new Set(piecePreferences.filter(item => item.wishlist || item.reaction !== 'none').map(item => item.generationId))].filter(id => !recent.has(id));
+    setSavedLoading(missing.length > 0); setSavedError('');
+    if (!missing.length) { setSavedGenerations([]); return; }
+    void Promise.all(missing.map(getSavedGeneration)).then(items => {
+      if (!current || sessionUid.current !== uid) return;
+      setSavedGenerations(items.filter((item): item is Generation => Boolean(item)));
+      if (items.some(item => !item)) setSavedError('Some saved looks are no longer available.');
+    }).catch(() => { if (current && sessionUid.current === uid) setSavedError('Your saved pieces could not load. Please try again.'); })
+      .finally(() => { if (current && sessionUid.current === uid) setSavedLoading(false); });
+    return () => { current = false; };
+  }, [user?.uid, authLoading, preferencesLoaded, piecePreferences, generations, savedRetry]);
 
   useEffect(() => {
     setMeasurements(createMeasurements(profile?.heightCm, profile?.weightKg, profile?.measurementSystem || 'us'));
@@ -206,7 +257,10 @@ function App() {
   useEffect(() => {
     if (screen === 'collection') document.getElementById('collection-title')?.focus();
     else if (screen === 'scanner') document.getElementById('scanner-title')?.focus();
-  }, [screen]);
+    else if (screen === 'gallery') document.getElementById('looks-title')?.focus();
+  }, [screen, looksFilter]);
+  const galleryLooks = filterLooks(generations, savedGenerations, piecePreferences, looksFilter);
+  const galleryCategory = looksFilters.find(item => item.id === looksFilter)!;
   const isMain = ['home', 'scanner', 'collection', 'gallery', 'detail', 'account'].includes(screen);
   const [bodyStyle, setBodyStyle] = useState<'male' | 'female' | undefined>();
   useEffect(() => { setBodyStyle(profile?.bodyStyle); }, [profile?.bodyStyle]);
@@ -218,7 +272,7 @@ function App() {
         : 'Your saved look still uses the earlier shared body. Update your details and rebuild your look to select from five body templates; the preview does not predict exact fit.';
 
   function navigate(next: Screen) {
-    setError(''); setNotice('');
+    setError(''); setNotice(''); setPieceNotice('');
     if (next === 'measurements' || next === 'selfie') { setPhase(next); }
     else if (next !== 'welcome' && next !== 'loading' && next !== 'preparing') setView(next);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -295,6 +349,20 @@ function App() {
     setGarmentLookupAttempt(value => value + 1);
   }
   function openLook(item: Generation) { setSelectedGeneration(item); navigate('detail'); }
+  function openLooks(filter: LooksFilter) { setLooksFilter(filter); navigate('gallery'); }
+  async function ratePiece(item: Generation, action: PieceAction) {
+    if (savingPiece || !preferencesLoaded) return;
+    const epoch = sessionEpoch.current;
+    setSavingPiece(item.garmentId); setError(''); setPieceNotice('');
+    try {
+      await savePieceAction(item, action);
+      if (sessionEpoch.current === epoch) setPieceNotice('Saved to your account.');
+    } catch (cause) { if (sessionEpoch.current === epoch) setError(errorText(cause)); }
+    finally { if (sessionEpoch.current === epoch) setSavingPiece(undefined); }
+  }
+  function pieceActions(item: Generation) {
+    return <PieceActions preference={piecePreferences.find(preference => preference.garmentId === item.garmentId)} disabled={!preferencesLoaded || Boolean(savingPiece)} saving={savingPiece === item.garmentId} onAction={action => void ratePiece(item, action)} />;
+  }
   async function downloadLook() {
     if (!chosenGeneration) return;
     const path = chosenGeneration.image2kPath || chosenGeneration.image4kPath || chosenGeneration.imagePath;
@@ -318,9 +386,10 @@ function App() {
   }
 
   return <div className="app-shell">
-    <header className="site-header"><button className="wordmark" aria-label="THREAD home" onClick={() => navigate(isMain ? 'scanner' : 'welcome')}>THREAD<span className="brand-asterisk">✳</span></button><span className="header-caption">YOUR FITTING ROOM.</span><div className="header-actions">{user && isMain && <><button className={`desktop-nav ${screen === 'gallery' ? 'selected' : ''}`} onClick={() => navigate('gallery')}>Your looks <span>{generations.length}</span></button><button className="avatar" aria-label="Your profile" onClick={() => navigate('account')}>{user?.photoURL ? <img src={user.photoURL} alt="" referrerPolicy="no-referrer" /> : <Icon name="user" size={18} />}</button></>}</div></header>
+    <header className="site-header"><button className="wordmark" aria-label="THREAD home" onClick={() => navigate(isMain ? 'scanner' : 'welcome')}>THREAD<span className="brand-asterisk">✳</span></button><span className="header-caption">YOUR FITTING ROOM.</span><div className="header-actions">{user && isMain && <><LooksMenu active={screen === 'gallery' || screen === 'detail'} filter={looksFilter} onSelect={openLooks} /><button className="avatar" aria-label="Your profile" onClick={() => navigate('account')}>{user?.photoURL ? <img src={user.photoURL} alt="" referrerPolicy="no-referrer" /> : <Icon name="user" size={18} />}</button></>}</div></header>
     {error && <div className="global-message error-message" role="alert"><span>{error}</span><button onClick={() => setError('')} aria-label="Dismiss error"><Icon name="close" size={17} /></button></div>}
     {notice && <div className="global-message notice-message" role="status"><span>{notice}</span><button onClick={() => setNotice('')} aria-label="Dismiss message"><Icon name="close" size={17} /></button></div>}
+    {isMain && preferencesError && <div className="global-message error-message" role="alert"><span>{preferencesError}</span><button onClick={() => setPreferencesRetry(value => value + 1)}>Reconnect</button></div>}
     {pendingGarment && !isMain && screen !== 'loading' && <div className="intent-banner"><Icon name="scan" size={17} /><span>Your scanned piece is waiting. Finish your profile to try it on.</span></div>}
 
     <main className={`main-content screen-${screen}`}>
@@ -388,6 +457,7 @@ function App() {
           <button className="tryon-result-photo" aria-label={`Open your ${resultImage.garmentName} look`} onClick={() => openLook(resultImage)}>
             <ProtectedImage path={resultImage.imagePath} alt={`You wearing ${resultImage.garmentName}`} className="tryon-result-image" />
           </button>
+          {pieceActions(resultImage)}
         </> : resultError ? <div className="tryon-result-status" role="alert">
           <Icon name="retry" size={30} /><h1>Let’s try that again.</h1><p>{resultError}</p>
           {resultGarmentId && <button className="button button-outline" onClick={() => retryGarment(resultGarmentId)}>Try again <Icon name="retry" size={17} /></button>}
@@ -410,13 +480,18 @@ function App() {
         <GarmentCatalog key={user?.uid} onSelect={scan} disabled={Boolean(showGenerationProgress)} headingLevel="h1" />
       </section>}
 
-      {screen === 'gallery' && <section className="gallery-page fade-in"><div className="gallery-heading"><div><p className="eyebrow">YOUR PERSONAL EDIT</p><h1>Your looks<span className="count-sup">{generations.length.toString().padStart(2, '0')}</span></h1><p>Every piece. Every possibility. All in one place.</p></div><button className="button button-ink" onClick={() => navigate('scanner')}><Icon name="scan" size={18} /> Choose a piece</button></div>{generations.length ? <div className="gallery-grid">{generations.map(lookCard)}</div> : <div className="empty-gallery"><div className="empty-look-frame"><Icon name="grid" size={34} /></div><h2>A little empty.<br />A lot of possibility.</h2><p>Choose your first piece to start building your personal collection of looks.</p><button className="button button-ink" onClick={() => navigate('scanner')}>Find your first look <Icon name="arrow" /></button></div>}</section>}
+      {screen === 'gallery' && <section className="gallery-page fade-in">
+        <div className="gallery-heading"><div><p className="eyebrow">YOUR PERSONAL EDIT</p><h1 id="looks-title" tabIndex={-1}>{galleryCategory.label}<span className="count-sup">{galleryLooks.length.toString().padStart(2, '0')}</span></h1><p>{looksFilter === 'all' ? 'Every piece. Every possibility. All in one place.' : 'Your picks, saved to your account.'}</p></div><button className="button button-ink" onClick={() => navigate('scanner')}><Icon name="scan" size={18} /> Choose a piece</button></div>
+        {looksFilter !== 'all' && savedError && <div className="saved-pieces-message" role="alert"><p>{savedError}</p><button className="text-button" onClick={() => setSavedRetry(value => value + 1)}>Try again <Icon name="retry" size={16} /></button></div>}
+        {looksFilter !== 'all' && preferencesError ? <p className="saved-pieces-message">Reconnect above to load your saved pieces.</p> : looksFilter !== 'all' && (!preferencesLoaded || savedLoading) ? <p className="saved-pieces-message" role="status">Loading your saved pieces…</p> : galleryLooks.length ? <div className="gallery-grid">{galleryLooks.map(lookCard)}</div> : <div className="empty-gallery"><div className="empty-look-frame"><Icon name={looksFilter === 'wishlist' ? 'bookmark' : 'grid'} size={34} /></div><h2>{looksFilter === 'all' ? 'A little empty. A lot of possibility.' : 'No pieces here yet.'}</h2><p>{galleryCategory.empty}</p><button className="button button-ink" onClick={() => navigate('scanner')}>Choose a piece <Icon name="arrow" /></button></div>}
+      </section>}
 
-      {screen === 'detail' && <section className="detail-page fade-in"><button className="text-button back-link" onClick={() => navigate('gallery')}><Icon name="back" size={17} /> Back to your looks</button>{chosenGeneration ? <div className="detail-layout"><div className="detail-image"><ProtectedImage path={chosenGeneration.imagePath} alt={`${chosenGeneration.garmentName} personalized try-on`} /></div><div className="detail-copy"><p className="eyebrow">YOUR PERSONAL TRY-ON</p><h1>{chosenGeneration.garmentName}</h1><div className="detail-divider" /><p className="detail-description">{chosenGeneration.status === 'failed' ? chosenGeneration.error || 'This look could not finish. Try generating it again.' : chosenGeneration.status === 'completed' ? 'A new perspective on a piece you love. Take a closer look, save it, and keep exploring.' : 'Your personalized look is on its way. We’ll keep the progress in your fitting room.'}</p><dl className="detail-facts"><div><dt>THE EXPERIENCE</dt><dd>Personalized virtual try-on</dd></div><div><dt>STATUS</dt><dd><span className={`status-pill ${chosenGeneration.status === 'failed' ? 'failed' : ''}`}>{chosenGeneration.status.replaceAll('_', ' ')}</span></dd></div>{dateText(chosenGeneration.createdAt) && <div><dt>CREATED</dt><dd>{dateText(chosenGeneration.createdAt)}</dd></div>}</dl>{chosenGeneration.status === 'completed' && <button className="button button-ink full-width" onClick={downloadLook} disabled={downloading}>{downloading ? <span className="spinner" /> : <Icon name="download" size={18} />}{chosenGeneration.image2kPath ? 'Save 2K image' : chosenGeneration.image4kPath ? 'Save 4K image' : 'Save your look'}</button>}{(chosenGeneration.status === 'failed' || chosenGeneration.status === 'completed') && <button className="button button-outline full-width" onClick={() => retryGarment(chosenGeneration.garmentId)}><Icon name="retry" size={17} />{chosenGeneration.status === 'failed' ? 'Try again' : 'Generate another look'}</button>}<p className="detail-disclaimer">An AI visual preview, not a physical fit prediction. Identity, garment prints, and fine details may vary.</p><button className="text-button" onClick={() => navigate('scanner')}>On to the next piece <Icon name="arrow" size={17} /></button></div></div> : <div className="empty-gallery"><h2>Choose a look first.</h2><button className="button button-ink" onClick={() => navigate('gallery')}>Your looks <Icon name="arrow" /></button></div>}</section>}
+      {screen === 'detail' && <section className="detail-page fade-in"><button className="text-button back-link" onClick={() => navigate('gallery')}><Icon name="back" size={17} /> Back to your looks</button>{chosenGeneration ? <div className="detail-layout"><div className="detail-image"><ProtectedImage path={chosenGeneration.imagePath} alt={`${chosenGeneration.garmentName} personalized try-on`} /></div><div className="detail-copy"><p className="eyebrow">YOUR PERSONAL TRY-ON</p><h1>{chosenGeneration.garmentName}</h1><div className="detail-divider" /><p className="detail-description">{chosenGeneration.status === 'failed' ? chosenGeneration.error || 'This look could not finish. Try generating it again.' : chosenGeneration.status === 'completed' ? 'A new perspective on a piece you love. Take a closer look, save it, and keep exploring.' : 'Your personalized look is on its way. We’ll keep the progress in your fitting room.'}</p><dl className="detail-facts"><div><dt>THE EXPERIENCE</dt><dd>Personalized virtual try-on</dd></div><div><dt>STATUS</dt><dd><span className={`status-pill ${chosenGeneration.status === 'failed' ? 'failed' : ''}`}>{chosenGeneration.status.replaceAll('_', ' ')}</span></dd></div>{dateText(chosenGeneration.createdAt) && <div><dt>CREATED</dt><dd>{dateText(chosenGeneration.createdAt)}</dd></div>}</dl>{chosenGeneration.status === 'completed' && pieceActions(chosenGeneration)}{chosenGeneration.status === 'completed' && <button className="button button-ink full-width" onClick={downloadLook} disabled={downloading}>{downloading ? <span className="spinner" /> : <Icon name="download" size={18} />}{chosenGeneration.image2kPath ? 'Save 2K image' : chosenGeneration.image4kPath ? 'Save 4K image' : 'Save your look'}</button>}{(chosenGeneration.status === 'failed' || chosenGeneration.status === 'completed') && <button className="button button-outline full-width" onClick={() => retryGarment(chosenGeneration.garmentId)}><Icon name="retry" size={17} />{chosenGeneration.status === 'failed' ? 'Try again' : 'Generate another look'}</button>}<p className="detail-disclaimer">An AI visual preview, not a physical fit prediction. Identity, garment prints, and fine details may vary.</p><button className="text-button" onClick={() => navigate('scanner')}>On to the next piece <Icon name="arrow" size={17} /></button></div></div> : <div className="empty-gallery"><h2>Choose a look first.</h2><button className="button button-ink" onClick={() => navigate('gallery')}>Your looks <Icon name="arrow" /></button></div>}</section>}
 
       {screen === 'account' && <section className="account-page fade-in"><p className="eyebrow">THE PERSON BEHIND THE LOOKS</p><h1>Your profile.</h1><div className="account-card"><div className="account-identity"><span className="avatar large-avatar"><Icon name="user" size={26} /></span><div><h2>{user?.displayName || 'Your account'}</h2><p>{user?.email}</p></div><span className="status-pill">{ready ? 'Ready to try on' : 'Setting up'}</span></div><dl className="account-measurements"><div><dt>Height</dt><dd>{formatHeight(profile?.heightCm, profile?.measurementSystem || 'us')}</dd></div><div><dt>Weight</dt><dd>{formatWeight(profile?.weightKg, profile?.measurementSystem || 'us')}</dd></div><div><dt>Your looks</dt><dd>{generations.length}</dd></div></dl><p className="account-note">{accountBodyNote}</p><button className="text-button" onClick={updateDetailsAndLook}>Update details and rebuild look <Icon name="arrow" size={16} /></button><button className="text-button" onClick={retakeSelfie}>Retake your selfie <Icon name="arrow" size={16} /></button></div><button className="text-button logout-button" onClick={logout} disabled={busy}><Icon name="logout" size={17} />Sign out</button></section>}
+      <p className="sr-only" role="status">{pieceNotice}</p>
     </main>
-    {isMain && <nav className="mobile-nav" aria-label="Main navigation"><button className={screen === 'home' ? 'active' : ''} aria-current={screen === 'home' ? 'page' : undefined} onClick={() => navigate('home')}><Icon name="spark" size={21} /><span>For you</span></button><button className={['scanner', 'collection'].includes(screen) ? 'active' : ''} aria-current={['scanner', 'collection'].includes(screen) ? 'page' : undefined} onClick={openScanTab}><Icon name="scan" size={23} /><span>Scan</span></button><button className={screen === 'gallery' || screen === 'detail' ? 'active' : ''} aria-current={screen === 'gallery' || screen === 'detail' ? 'page' : undefined} onClick={() => navigate('gallery')}><Icon name="grid" size={20} /><span>Your looks</span></button></nav>}
+    {isMain && <nav className="mobile-nav" aria-label="Main navigation"><button className={screen === 'home' ? 'active' : ''} aria-current={screen === 'home' ? 'page' : undefined} onClick={() => navigate('home')}><Icon name="spark" size={21} /><span>For you</span></button><button className={['scanner', 'collection'].includes(screen) ? 'active' : ''} aria-current={['scanner', 'collection'].includes(screen) ? 'page' : undefined} onClick={openScanTab}><Icon name="scan" size={23} /><span>Scan</span></button><LooksMenu mobile active={screen === 'gallery' || screen === 'detail'} filter={looksFilter} onSelect={openLooks} /></nav>}
     <footer className="site-footer"><span>THREAD<span className="brand-asterisk">✳</span></span></footer>
   </div>;
 }

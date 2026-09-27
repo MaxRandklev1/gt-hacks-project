@@ -4,6 +4,7 @@ import { getFirestore, doc, collection, onSnapshot, query, where, orderBy, limit
 import { connectAuthEmulator } from 'firebase/auth';
 import { getStorage, ref, uploadBytesResumable, getBlob, connectStorageEmulator } from 'firebase/storage';
 import { CONSENT_VERSION, validateMeasurements, validateReferenceSelfie } from './validation';
+import { applyPieceAction, type PiecePreference, type PieceAction } from './piece-preferences';
 
 export type SessionUser = Pick<User, 'uid' | 'displayName' | 'email' | 'photoURL'>;
 export type PhotoSelection = { index: number; selected: boolean; score: number; reason: string };
@@ -133,6 +134,27 @@ export async function getGarment(id: string): Promise<Garment | null> {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/.test(id)) throw new Error('Invalid item code.');
   const snap = await getDoc(doc(services().db, 'garments', id));
   return snap.exists() && snap.data().active ? { ...snap.data(), id: snap.id } as Garment : null;
+}
+export function subscribePiecePreferences(uid: string, callback: (preferences: PiecePreference[]) => void, onError?: (error: Error) => void) {
+  return onSnapshot(query(collection(services().db, 'users', uid, 'piecePreferences'), orderBy('updatedAt', 'desc')), snap => callback(snap.docs.map(d => ({ ...d.data(), garmentId: d.id }) as PiecePreference)), onError);
+}
+export async function getSavedGeneration(id: string): Promise<Generation | null> {
+  const { db, user } = signedIn();
+  const snap = await getDoc(doc(db, 'users', user.uid, 'generations', id));
+  assertAccount(user.uid);
+  return snap.exists() ? { ...snap.data(), id: snap.id } as Generation : null;
+}
+export async function savePieceAction(generation: Generation, action: PieceAction) {
+  if (generation.status !== 'completed') throw new Error('Wait for this look to finish before saving it.');
+  const { db, user } = signedIn();
+  const target = doc(db, 'users', user.uid, 'piecePreferences', generation.garmentId);
+  await runTransaction(db, async tx => {
+    assertAccount(user.uid);
+    const snap = await tx.get(target);
+    assertAccount(user.uid);
+    const next = applyPieceAction(snap.exists() ? snap.data() as PiecePreference : undefined, action);
+    tx.set(target, { ...next, generationId: generation.id, updatedAt: serverTimestamp() });
+  });
 }
 export async function listActiveGarments(): Promise<Garment[]> {
   const { db, user } = signedIn();

@@ -1,8 +1,12 @@
 import type { CSSProperties } from 'react';
 
-export type IconName = 'arrow' | 'back' | 'scan' | 'grid' | 'user' | 'plus' | 'close' | 'check' | 'camera' | 'upload' | 'spark' | 'clock' | 'retry' | 'logout' | 'download' | 'chevron' | 'shield';
+export type IconName = 'arrow' | 'back' | 'scan' | 'grid' | 'user' | 'plus' | 'close' | 'check' | 'camera' | 'upload' | 'spark' | 'clock' | 'retry' | 'logout' | 'download' | 'chevron' | 'shield' | 'like' | 'dislike' | 'bookmark' | 'down';
 
 const paths: Record<IconName, string[]> = {
+  like: ['M7 10v11H3V10z', 'M7 10l5-8c2 0 3 2 2 5l-1 3h6a2 2 0 0 1 2 2l-2 7a3 3 0 0 1-3 2H7'],
+  dislike: ['M7 14V3H3v11z', 'M7 14l5 8c2 0 3-2 2-5l-1-3h6a2 2 0 0 0 2-2l-2-7a3 3 0 0 0-3-2H7'],
+  bookmark: ['M6 3h12v18l-6-4-6 4z'],
+  down: ['m5 9 7 7 7-7'],
   arrow: ['M4 12h16', 'm13 5 7 7-7 7'],
   back: ['M20 12H4', 'm11 5-7 7 7 7'],
   scan: ['M8 3H3v5', 'M16 3h5v5', 'M21 16v5h-5', 'M8 21H3v-5', 'M7 12h10'],

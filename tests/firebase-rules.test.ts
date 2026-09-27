@@ -166,6 +166,135 @@ describe('Firestore ownership and protected fields', () => {
   });
 });
 
+describe('Per-garment preferences', () => {
+  const preferencePath = `users/${ALICE}/piecePreferences/coat-1`;
+  const generationPath = `users/${ALICE}/generations/finished-look`;
+  const preference = (extra: Record<string, unknown> = {}) => ({
+    reaction: 'like', wishlist: false, generationId: 'finished-look', updatedAt: stamp(), ...extra,
+  });
+  const result = (extra: Record<string, unknown> = {}) => ({ status: 'completed', garmentId: 'coat-1', ...extra });
+
+  beforeEach(async () => { await seed({ [generationPath]: result() }); });
+
+  it('allows the owner to create, read, query and update reactions and wishlist independently', async () => {
+    const db = dbFor();
+    const own = db.doc(preferencePath);
+    await assertSucceeds(own.set(preference()));
+    await assertSucceeds(own.get());
+    expect((await assertSucceeds(db.collection(`users/${ALICE}/piecePreferences`).get())).docs.map(item => item.id)).toEqual(['coat-1']);
+    for (const reaction of ['like', 'dislike', 'none']) {
+      for (const wishlist of [true, false]) {
+        await assertSucceeds(own.update({ reaction, wishlist, updatedAt: stamp() }));
+        expect((await own.get()).data()).toMatchObject({ reaction, wishlist, generationId: 'finished-look' });
+      }
+    }
+  });
+
+  it('allows preferences on inactive or missing catalog entries, including clearing a previous choice', async () => {
+    await seed({ 'garments/coat-1': { active: false } });
+    const own = dbFor().doc(preferencePath);
+    await assertSucceeds(own.set(preference({ wishlist: true })));
+    await assertSucceeds(own.update({ reaction: 'none', wishlist: false, updatedAt: stamp() }));
+    await env.withSecurityRulesDisabled(context => context.firestore().doc('garments/coat-1').delete());
+    await assertSucceeds(own.update({ reaction: 'dislike', updatedAt: stamp() }));
+  });
+
+  it('allows an owner to replace the reference with another completed look for the same garment', async () => {
+    await seed({ [`users/${ALICE}/generations/later-look`]: result() });
+    const own = dbFor().doc(preferencePath);
+    await assertSucceeds(own.set(preference()));
+    await assertSucceeds(own.update({ generationId: 'later-look', updatedAt: stamp() }));
+  });
+
+  it('denies nonowners and anonymous readers, queries, creates, updates and deletes', async () => {
+    await assertSucceeds(dbFor().doc(preferencePath).set(preference()));
+    for (const db of [dbFor(BOB), env.unauthenticatedContext().firestore()]) {
+      await assertFails(db.doc(preferencePath).get());
+      await assertFails(db.collection(`users/${ALICE}/piecePreferences`).get());
+      await assertFails(db.doc(preferencePath).update({ wishlist: true, updatedAt: stamp() }));
+      await assertFails(db.doc(preferencePath).delete());
+    }
+    await assertSucceeds(dbFor().doc(preferencePath).delete());
+    for (const db of [dbFor(BOB), env.unauthenticatedContext().firestore()]) {
+      await assertFails(db.doc(preferencePath).set(preference()));
+    }
+  });
+
+  it.each([
+    ['unknown reaction', { reaction: 'love' }],
+    ['nonstring reaction', { reaction: true }],
+    ['string wishlist', { wishlist: 'true' }],
+    ['null wishlist', { wishlist: null }],
+    ['nonstring generation ID', { generationId: 42 }],
+    ['empty generation ID', { generationId: '' }],
+    ['generation path injection', { generationId: `../${BOB}/generations/finished-look` }],
+    ['arbitrary additional field', { garmentName: 'Client-supplied name' }],
+    ['forged old timestamp', { updatedAt: firebase.firestore.Timestamp.fromMillis(0) }],
+    ['forged future timestamp', { updatedAt: firebase.firestore.Timestamp.fromMillis(4102444800000) }],
+    ['string timestamp', { updatedAt: 'now' }],
+    ['null timestamp', { updatedAt: null }],
+  ])('rejects %s on both create and update', async (_label, extra) => {
+    const own = dbFor().doc(preferencePath);
+    await assertFails(own.set(preference(extra)));
+    await assertSucceeds(own.set(preference()));
+    await assertFails(own.update({ updatedAt: stamp(), ...extra }));
+  });
+
+  it.each(['reaction', 'wishlist', 'generationId', 'updatedAt'])('requires %s on create and prevents removing it on update', async field => {
+    const own = dbFor().doc(preferencePath);
+    const incomplete: Record<string, unknown> = preference();
+    delete incomplete[field];
+    await assertFails(own.set(incomplete));
+    await assertSucceeds(own.set(preference()));
+    await assertFails(own.update({ updatedAt: stamp(), [field]: firebase.firestore.FieldValue.delete() }));
+  });
+
+  it('rejects missing, foreign-account and mismatched garment references on create and update', async () => {
+    await seed({
+      [`users/${BOB}/generations/foreign-look`]: result(),
+      [`users/${ALICE}/generations/other-garment`]: result({ garmentId: 'shirt-2' }),
+    });
+    const own = dbFor().doc(preferencePath);
+    for (const generationId of ['missing-look', 'foreign-look', 'other-garment']) {
+      await assertFails(own.set(preference({ generationId })));
+    }
+    await assertSucceeds(own.set(preference()));
+    for (const generationId of ['missing-look', 'foreign-look', 'other-garment']) {
+      await assertFails(own.update({ generationId, updatedAt: stamp() }));
+    }
+    await assertFails(dbFor().doc(`users/${ALICE}/piecePreferences/shirt-2`).set(preference()));
+  });
+
+  it.each(['queued', 'running', 'failed'])('rejects a %s generation on create and update', async status => {
+    await seed({ [`users/${ALICE}/generations/unfinished-look`]: result({ status }) });
+    const own = dbFor().doc(preferencePath);
+    await assertFails(own.set(preference({ generationId: 'unfinished-look' })));
+    await assertSucceeds(own.set(preference()));
+    await assertFails(own.update({ generationId: 'unfinished-look', updatedAt: stamp() }));
+  });
+
+  it('revalidates the referenced result on every update while allowing owner deletion without it', async () => {
+    const own = dbFor().doc(preferencePath);
+    await assertSucceeds(own.set(preference()));
+    await seed({ [generationPath]: result({ status: 'failed' }) });
+    await assertFails(own.update({ wishlist: true, updatedAt: stamp() }));
+    await env.withSecurityRulesDisabled(context => context.firestore().doc(generationPath).delete());
+    await assertFails(own.update({ reaction: 'none', updatedAt: stamp() }));
+    await assertSucceeds(own.delete());
+  });
+
+  it('keeps generation create, update and delete protected, including batched preference forgery', async () => {
+    const db = dbFor();
+    await assertFails(db.doc(`users/${ALICE}/generations/forged-look`).set(result()));
+    await assertFails(db.doc(generationPath).update({ garmentId: 'shirt-2' }));
+    await assertFails(db.doc(generationPath).delete());
+    const batch = db.batch();
+    batch.set(db.doc(`users/${ALICE}/generations/forged-look`), result());
+    batch.set(db.doc(preferencePath), preference({ generationId: 'forged-look' }));
+    await assertFails(batch.commit());
+  });
+});
+
 describe('Active garment inventory', () => {
   it('allows authenticated active-filtered reads and excludes inactive or unfinished catalog items', async () => {
     await seed({

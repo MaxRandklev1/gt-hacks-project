@@ -37,6 +37,21 @@ service cloud.firestore {
       allow update: if owner(uid) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(userFields())
         && request.resource.data.createdAt == resource.data.createdAt && validUser(request.resource.data);
       match /generations/{id} { allow read: if owner(uid); }
+      match /piecePreferences/{garmentId} {
+        allow read, delete: if owner(uid);
+        function completedGarment(generationId) {
+          let generation = get(/databases/$(database)/documents/users/$(uid)/generations/$(generationId)).data;
+          return generation.status == 'completed' && generation.garmentId == garmentId;
+        }
+        function validPreference(data) {
+          return data.keys().hasOnly(['reaction','wishlist','generationId','updatedAt'])
+            && data.keys().hasAll(['reaction','wishlist','generationId','updatedAt'])
+            && data.reaction in ['like','dislike','none'] && data.wishlist is bool
+            && data.generationId is string && data.generationId.matches('^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$')
+            && data.updatedAt == request.time && completedGarment(data.generationId);
+        }
+        allow create, update: if owner(uid) && validPreference(request.resource.data);
+      }
       match /onboarding/{draftId} {
         allow read: if owner(uid) && draftId == 'current';
         function validDraft(data) {
