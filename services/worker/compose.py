@@ -274,3 +274,47 @@ def blend_face(image, redrawn, box, mask):
     out = image.copy()
     out.paste(Image.fromarray(np.clip(region * (1 - alpha) + source * alpha, 0, 255).astype(np.uint8)), box[:2])
     return out
+
+
+def _skin_stats(lab, mask, drop_dark):
+    """Trimmed per-channel median/spread of skin in Lab: drops the darkest pixels (beard, brows, eyes,
+    shadow) and the brightest 5% (specular highlights). Medians keep lips from tinting the result."""
+    pixels = lab[mask]
+    if len(pixels) < 200:
+        return None
+    low, high = np.percentile(pixels[:, 0], [drop_dark, 95])
+    pixels = pixels[(pixels[:, 0] >= low) & (pixels[:, 0] <= high)]
+    if len(pixels) < 100:
+        return None
+    return np.median(pixels, axis=0), pixels.std(axis=0) + 1e-3
+
+
+def skin_tone_transform(image, labels):
+    """How to move the arms' skin tone to the face's, or None when they already match.
+
+    The generation step reliably recolours the face and neck but sometimes leaves the pose model's
+    arms and hands lighter or darker. This is a statistics transfer, not a flat recolour: each arm
+    pixel keeps its offset from the arms' own median (shading, veins, texture, highlights), and only
+    the median and the spread move to the face's."""
+    lab = cv2.cvtColor(np.asarray(image.convert("RGB")), cv2.COLOR_RGB2LAB).astype(np.float32)
+    face = cv2.erode(group_mask(labels, "face").astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+    arms = cv2.erode(group_mask(labels, "arms").astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
+    face_stats, arm_stats = _skin_stats(lab, face, 40), _skin_stats(lab, arms, 10)
+    if face_stats is None or arm_stats is None:
+        return None
+    (face_median, face_spread), (arm_median, arm_spread) = face_stats, arm_stats
+    if np.linalg.norm(face_median - arm_median) < 4:  # Already a match (about one just-noticeable step).
+        return None
+    return {"face": face_median, "arms": arm_median, "ratio": np.clip(face_spread / arm_spread, 0.8, 1.25)}
+
+
+def match_skin_tone(image, arms_mask, transform):
+    """Apply a skin_tone_transform to one size of the personal base; `arms_mask` from the 1024 labels."""
+    if transform is None:
+        return image
+    lab = cv2.cvtColor(np.asarray(image.convert("RGB")), cv2.COLOR_RGB2LAB).astype(np.float32)
+    shifted = (lab - transform["arms"]) * transform["ratio"] + transform["face"]
+    mask = resize_mask(arms_mask, image.size)
+    alpha = feather(_dilate(mask, max(1, image.width // 500)), max(2, image.width // 350))
+    out = lab * (1 - alpha) + shifted * alpha
+    return Image.fromarray(cv2.cvtColor(np.clip(out, 0, 255).astype(np.uint8), cv2.COLOR_LAB2RGB))

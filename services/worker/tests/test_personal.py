@@ -8,7 +8,7 @@ import numpy as np
 from PIL import Image
 
 from services.worker.compose import compose, garment_mask, hair_matte, head_crop, lock_personal_base
-from services.worker.parsing import LABELS
+from services.worker.parsing import LABELS, group_mask
 from services.worker.personal import CompositeError, personal_paths, png_bytes, mask_png, sha256
 from services.worker.worker import FirebaseStore, JobError, Worker, now
 
@@ -85,6 +85,30 @@ class ComposeTests(unittest.TestCase):
         self.assertLess(out[box[1], box[0]].mean(), 5)                  # Crop edge never shows.
         with self.assertRaises(CompositeError):
             face_box(np.zeros((50, 50), np.uint8))
+
+
+    def test_arm_skin_tone_moves_to_the_face_but_keeps_its_own_texture(self):
+        from services.worker.compose import match_skin_tone, skin_tone_transform
+        labels = np.zeros((200, 200), np.uint8)
+        labels[20:60, 80:120] = L["face"]
+        labels[70:190, 20:50] = L["right_arm"]
+        rng = np.random.default_rng(0)
+        image = np.full((200, 200, 3), 235, np.uint8)
+        image[20:60, 80:120] = (120, 80, 55)                                   # Brown face.
+        texture = rng.integers(-12, 12, (120, 30, 1))
+        image[70:190, 20:50] = np.clip(np.array([225, 190, 170]) + texture, 0, 255)  # Light, textured arm.
+        picture = Image.fromarray(image)
+        tone = skin_tone_transform(picture, labels)
+        self.assertIsNotNone(tone)
+        out = np.asarray(match_skin_tone(picture, group_mask(labels, "arms"), tone)).astype(int)
+        arm = out[90:170, 28:42]
+        self.assertLess(np.abs(arm.reshape(-1, 3).mean(0) - (120, 80, 55)).max(), 15)   # Now brown like the face.
+        self.assertGreater(arm.std(), 3)                                                # Texture kept, not a flat fill.
+        self.assertEqual(out[5, 150].tolist(), [235, 235, 235])                        # Background untouched.
+        # Arms that already match, or a missing face, are left alone.
+        image[70:190, 20:50] = np.clip(np.array([120, 80, 55]) + texture, 0, 255)
+        self.assertIsNone(skin_tone_transform(Image.fromarray(image), labels))
+        self.assertIsNone(skin_tone_transform(picture, np.where(labels == L["face"], 0, labels).astype(np.uint8)))
 
 
 class PersonalWorkerTests(unittest.TestCase):

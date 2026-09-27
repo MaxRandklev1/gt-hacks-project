@@ -24,12 +24,12 @@ from PIL import Image
 try:
     from .comfy import patch_personal_graph, safe_id
     from .compose import (CompositeError, alignment_score, base_regions, compose, covering_mask, edit_region, garment_mask,
-                          head_crop, lock_personal_base, resize_mask)
+                          head_crop, lock_personal_base, match_skin_tone, resize_mask, skin_tone_transform)
     from .parsing import HumanParser, group_mask
 except ImportError:
     from comfy import patch_personal_graph, safe_id
     from compose import (CompositeError, alignment_score, base_regions, compose, covering_mask, edit_region, garment_mask,
-                         head_crop, lock_personal_base, resize_mask)
+                         head_crop, lock_personal_base, match_skin_tone, resize_mask, skin_tone_transform)
     from parsing import HumanParser, group_mask
 
 
@@ -247,6 +247,13 @@ class PersonalBaseMixin:
         personal_1024 = lock_personal_base(pose["b1024"], raw_1024, edit)
         personal_2k = lock_personal_base(pose["b2k"], raw_2k, edit)
         labels = self.human().parse(personal_1024)
+        # Generation reliably recolours the face and neck but not always the arms and hands: bring
+        # their skin tone to the face's, keeping their own shading and texture.
+        tone = skin_tone_transform(personal_1024, labels)
+        if tone is not None:
+            arms = group_mask(labels, "arms")
+            personal_1024, personal_2k = match_skin_tone(personal_1024, arms, tone), match_skin_tone(personal_2k, arms, tone)
+            labels = self.human().parse(personal_1024)
         # A new face/beard shape is expected; the locked body must still match the pose.
         if alignment_score(pose["labels"], labels, include_face=False) < MIN_ALIGNMENT:
             raise CompositeError("Your look didn't line up with the pose. Please try another selfie.")
