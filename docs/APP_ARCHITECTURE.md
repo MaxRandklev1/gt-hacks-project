@@ -105,6 +105,10 @@ The piece picker lists authenticated Firestore `garments` with `active == true`,
 
 Cards prefer `thumbnailPath` and fall back to the reference `imagePath`. Prepare lightweight thumbnails with `services/worker/.venv/Scripts/python.exe scripts/prepare-catalog-thumbnails.py --help`; the script defaults to a dry run. Publishing adds content-addressed, metadata-stripped images and updates only `thumbnailPath`, leaving original references, presets, and printed destinations intact.
 
+## Try-on result screen
+
+After scanning or selecting a garment, the result screen shows the current outfit image followed by **Choose your next piece**, which returns to scanning. The greeting, personal-base preview and extra result cards are omitted. The image remains tappable to open the existing detail/download view. Queued and failed requests show their status or retry action instead of an older outfit. Job IDs match generation-history document IDs; the result waits for that matching image when the job and history subscriptions arrive separately.
+
 ## Welcome page video
 
 The welcome page reserves a rectangle for the product walkthrough, shows a prominent **Sign in with Google** button, and uses the same sans-serif heading style throughout. Set the public build variable `VITE_HOMEPAGE_VIDEO_URL` to a hosted video URL when the clip is ready. The video plays muted, loops, supports inline phone playback, and exposes playback controls. Without a source (or if the video fails), the area shows a clear video placeholder. No placeholder media request is made.

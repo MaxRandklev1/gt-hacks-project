@@ -15,6 +15,7 @@ import { HomepageVideo } from './components/HomepageVideo';
 import { createMeasurements, editMeasurement, formatHeight, formatWeight, measurementsValid, switchMeasurementSystem } from './lib/measurements';
 import { validateReferenceSelfie } from './lib/validation';
 import { onboardingProgress, replacementSetupScreen, readOnboardingChoices, saveOnboardingChoices, type OnboardingChoices } from './lib/onboarding';
+import { selectTryOnResult } from './lib/tryon-result';
 import './styles.css';
 
 type View = 'home' | 'scanner' | 'collection' | 'gallery' | 'detail' | 'account';
@@ -186,7 +187,6 @@ function App() {
     requestGeneration(garment.id).then(jobId => {
       if (!current) return;
       setRequesting(false); setRequestedJob(jobId); clearPendingGarment(); setPendingGarment(null);
-      setNotice('Your piece is in the fitting room. We’ll keep its progress here.');
     }).catch(cause => { if (current) setError(errorText(cause)); }).finally(() => { if (current) setRequesting(false); });
     return () => { current = false; };
   }, [garment, pendingGarment, user?.uid, ready, editingProfile, setupLoaded]);
@@ -196,12 +196,17 @@ function App() {
   const awaitingJob = Boolean(requestedJob && !jobFromRequest);
   const showGenerationProgress = requesting || activeJob || awaitingJob;
   const chosenGeneration = generations.find(item => item.id === selectedGeneration?.id) || selectedGeneration;
+  const result = selectTryOnResult(jobs, generations, requestedJob);
+  const resultError = pendingGarment ? error : result.status === 'failed'
+    ? result.generation?.error || result.job?.error || 'This look could not finish. Please try again.' : '';
+  const resultWaiting = !resultError && Boolean(pendingGarment || requesting || result.status === 'pending');
+  const resultImage = !pendingGarment && !requesting && result.status === 'completed' ? result.generation : undefined;
+  const resultGarmentId = pendingGarment || result.generation?.garmentId || result.job?.garmentId;
   const screen: Screen = authLoading ? 'loading' : !user ? 'welcome' : !setupLoaded ? 'loading' : editingProfile && phase ? phase : ready ? view : phase || (setup.screen === 'ready' ? view : setup.screen);
   useEffect(() => {
     if (screen === 'collection') document.getElementById('collection-title')?.focus();
     else if (screen === 'scanner') document.getElementById('scanner-title')?.focus();
   }, [screen]);
-  const firstName = user?.displayName?.trim().split(/\s+/)[0] || 'there';
   const isMain = ['home', 'scanner', 'collection', 'gallery', 'detail', 'account'].includes(screen);
   const [bodyStyle, setBodyStyle] = useState<'male' | 'female' | undefined>();
   useEffect(() => { setBodyStyle(profile?.bodyStyle); }, [profile?.bodyStyle]);
@@ -285,7 +290,7 @@ function App() {
   }
   function retryGarment(id: string) {
     requested.current.delete(`${user?.uid}:${id}`);
-    rememberGarment(id); setGarment(null); setPendingGarment(id); setView('home'); setError('');
+    rememberGarment(id); setGarment(null); setPendingGarment(id); setView('home'); setError(''); setNotice('');
     // Retry the lookup even when the same pending piece previously failed.
     setGarmentLookupAttempt(value => value + 1);
   }
@@ -377,7 +382,22 @@ function App() {
         {enrollmentFailed && <p className="microcopy">Your original selfie and account are still saved.</p>}
       </section></div>}
 
-      {screen === 'home' && <div className="home-layout fade-in"><section className="home-primary"><div className="hello-line"><span className="status-dot" />YOUR FITTING ROOM IS READY</div><h1>Hey {firstName}.<br />Make it yours.</h1><p className="hero-description">Your next favorite piece is out there.<br />Let’s see it on you.</p><button className="scan-cta" onClick={() => navigate('scanner')}><span className="scan-cta-icon"><Icon name="scan" size={28} /></span><span><strong>{generations.length ? 'Choose your next piece' : 'Choose your first piece'}</strong><small>Browse the collection or scan a THREAD QR.</small></span><Icon name="arrow" size={23} /></button>{pendingGarment && <div className="pending-garment"><Icon name="scan" /><div><strong>{garmentLoading ? 'Finding your piece…' : garment?.name || 'Scanned piece'}</strong><p>{requesting ? 'Starting your try-on automatically…' : error ? 'We couldn’t start this try-on yet.' : 'Ready to enter your fitting room.'}</p>{error && <button className="text-button" onClick={() => retryGarment(pendingGarment)}>Try again <Icon name="retry" size={14} /></button>}</div></div>}{showGenerationProgress && <div className="job-card"><div className="job-card-heading"><span className="spinner" /><div><strong>{activeJob?.status === 'queued' ? 'Your piece is in line' : 'Your look is taking shape'}</strong><p>{activeJob?.message || 'We’re creating your personalized try-on. This takes a few seconds.'}</p></div></div><ProgressBar value={activeJob?.progress} label={activeJob?.stage?.replaceAll('_', ' ') || (requesting ? 'Starting your try-on' : 'Preparing your look')} /><button className="text-button" onClick={() => navigate('gallery')}>View your looks <Icon name="arrow" size={16} /></button></div>}{profile?.identity?.previewPath && <div className="your-look"><ProtectedImage path={profile.identity.previewPath} alt="Your look in the fitting room" className="your-look-image" /><div><strong>Your saved fitting-room look.</strong><p>Every piece you scan goes on this look. You can update it in your profile.</p><button className="text-button" onClick={() => navigate('account')}>Manage your look <Icon name="user" size={15} /></button></div></div>}</section><aside className="home-look"><div className="section-heading compact"><div><p className="eyebrow">{generations.length ? 'YOUR LATEST LOOK' : 'YOUR FIRST LOOK'}</p><h2>{generations.length ? 'Made for your mood.' : 'Start with a piece you love.'}</h2></div></div>{generations.length ? lookCard(generations[0], 0) : <div className="home-empty-look"><Icon name="grid" size={34} /><h3>Your first look starts here.</h3><p>Choose a garment from the collection or scan its THREAD QR to see it on you.</p><button className="button button-outline" onClick={() => navigate('scanner')}>Choose a piece <Icon name="arrow" size={17} /></button></div>}</aside></div>}
+      {screen === 'home' && <section className="tryon-result fade-in" aria-label="Your try-on">
+        {resultImage ? <>
+          <h1 className="sr-only">Your latest look</h1>
+          <button className="tryon-result-photo" aria-label={`Open your ${resultImage.garmentName} look`} onClick={() => openLook(resultImage)}>
+            <ProtectedImage path={resultImage.imagePath} alt={`You wearing ${resultImage.garmentName}`} className="tryon-result-image" />
+          </button>
+        </> : resultError ? <div className="tryon-result-status" role="alert">
+          <Icon name="retry" size={30} /><h1>Let’s try that again.</h1><p>{resultError}</p>
+          {resultGarmentId && <button className="button button-outline" onClick={() => retryGarment(resultGarmentId)}>Try again <Icon name="retry" size={17} /></button>}
+        </div> : resultWaiting ? <div className="tryon-result-status" role="status">
+          <span className="spinner large" /><h1>{garmentLoading ? 'Finding your piece…' : result.job?.status === 'queued' ? 'Your piece is in line' : 'Your look is taking shape'}</h1>
+          <p>{result.job?.message || 'We’re creating your personalized try-on. Your image will appear here.'}</p>
+          <ProgressBar value={result.job?.progress} label={result.job?.stage?.replaceAll('_', ' ') || 'Preparing your look'} />
+        </div> : <div className="tryon-result-status"><Icon name="scan" size={34} /><h1>Your next look starts with a scan.</h1><p>Scan a garment’s QR code to see yourself wearing it.</p></div>}
+        <button className="button button-ink full-width tryon-result-next" onClick={() => navigate('scanner')}>Choose your next piece <Icon name="arrow" size={19} /></button>
+      </section>}
 
       {screen === 'scanner' && <section className="piece-picker fade-in">
         {!compactPicker && <header className="piece-picker-heading"><div><p className="eyebrow">YOUR NEXT FIND</p><h1>Pick your next piece.<br />See it on you.</h1><p>Browse the collection or scan a garment’s tag. Either way, your next look starts here.</p></div></header>}
