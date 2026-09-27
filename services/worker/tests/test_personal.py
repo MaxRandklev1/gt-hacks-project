@@ -111,6 +111,23 @@ class ComposeTests(unittest.TestCase):
         self.assertIsNone(skin_tone_transform(picture, np.where(labels == L["face"], 0, labels).astype(np.uint8)))
 
 
+    def test_uncovered_tee_is_filled_from_what_the_render_shows(self):
+        from services.worker.compose import fill_uncovered
+        size = 64
+        personal = Image.new("RGB", (size, size), (240, 240, 240))          # White tee left visible.
+        render = np.full((size, size, 3), 200, np.uint8)
+        render[:, :32] = (150, 110, 90)                                       # Render: model's neck skin on the left...
+        uncovered = np.zeros((size, size), bool); uncovered[20:40, 10:54] = True
+        skin = np.zeros((size, size), bool); skin[:, :32] = True
+        background = ~skin                                                    # ...and background on the right.
+        tone = {"render": np.array([130.0, 140.0, 145.0]), "person": np.array([90.0, 145.0, 150.0]), "ratio": np.ones(3)}
+        out = fill_uncovered(np.asarray(personal, np.float32), personal, Image.fromarray(render), uncovered, skin, background,
+                             tone, np.zeros((size, size), bool), np.zeros((size, size), bool), 1)
+        self.assertLess(out[30, 15].mean(), 150)                             # Skin, shifted darker to the person.
+        self.assertLess(abs(out[30, 50].mean() - 240), 12)                   # Background matched to the personal base.
+        self.assertEqual(out[5, 5].tolist(), [240, 240, 240])                # Outside the uncovered area: untouched.
+
+
 class PersonalWorkerTests(unittest.TestCase):
     def make(self, temp):
         store, comfy = Mock(), Mock()

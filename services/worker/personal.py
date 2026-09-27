@@ -24,18 +24,18 @@ from PIL import Image
 try:
     from .comfy import patch_personal_graph, safe_id
     from .compose import (CompositeError, alignment_score, base_regions, compose, covering_mask, edit_region, garment_mask,
-                          head_crop, lock_personal_base, match_skin_tone, resize_mask, skin_tone_transform)
+                          head_crop, lock_personal_base, match_skin_tone, render_skin_transform, resize_mask, skin_tone_transform)
     from .parsing import HumanParser, group_mask
 except ImportError:
     from comfy import patch_personal_graph, safe_id
     from compose import (CompositeError, alignment_score, base_regions, compose, covering_mask, edit_region, garment_mask,
-                         head_crop, lock_personal_base, match_skin_tone, resize_mask, skin_tone_transform)
+                         head_crop, lock_personal_base, match_skin_tone, render_skin_transform, resize_mask, skin_tone_transform)
     from parsing import HumanParser, group_mask
 
 
 PERSONAL_STEPS = 24
 MIN_ALIGNMENT = 0.85  # Each visible pose anchor for garments; original lower-body IoU for personal bases.
-GARMENT_MASK_VERSION = 2  # Recompute masks/scores after the bounded collar/hem-occlusion update.
+GARMENT_MASK_VERSION = 4  # v3: render background mask. v4: hoods/scarves labelled as head coverings count as garment.
 MAX_ASSET_BYTES = 40 * 1024 * 1024
 HEX = re.compile(r"[0-9a-f]{64}")
 
@@ -205,12 +205,13 @@ class PersonalBaseMixin:
             tee = group_mask(pose["labels"], "garment")
             skin = group_mask(labels, "face") | group_mask(labels, "arms")
             buffer = io.BytesIO()
-            np.savez_compressed(buffer, garment=garment, uncovered=tee & ~garment, skin=skin, alignment=np.float32(score))
+            np.savez_compressed(buffer, garment=garment, uncovered=tee & ~garment, skin=skin, background=labels == 0,
+                                alignment=np.float32(score))
             atomic_write(path, buffer.getvalue())
         data = np.load(path)
         if float(data["alignment"]) < MIN_ALIGNMENT:
             raise ValueError("This garment render does not line up with the pose base. Re-render it before use.")
-        return {key: data[key] for key in ("garment", "uncovered", "skin")}
+        return {key: data[key] for key in ("garment", "uncovered", "skin", "background")}
 
     # ---- onboarding -----------------------------------------------------------------------------
 
@@ -303,9 +304,14 @@ class PersonalBaseMixin:
         r1024 = Image.open(render_paths[0]).convert("RGB")
         r2k = Image.open(render_paths[1]).convert("RGB")
         uncovered = masks["uncovered"] | personal["tee"]  # Tee left visible on either base.
-        image = compose(personal["p1024"], r1024, masks["garment"], personal["hair"], uncovered, pose["b1024"], masks["skin"], pose["plate"])
-        size = personal["p2k"].size
-        image2k = compose(personal["p2k"], r2k, masks["garment"], personal["hair"], uncovered, pose["b2k"], masks["skin"], pose["plate"])
+        # The person's skin sits where the pose model's face and neck were, minus their hair.
+        person_skin = group_mask(pose["labels"], "face") & ~personal["hair"]
+        tone = render_skin_transform(personal["p1024"], person_skin, r1024, masks["skin"])
+        extra = {"render_background": masks["background"], "skin_tone": tone}
+        image = compose(personal["p1024"], r1024, masks["garment"], personal["hair"], uncovered, pose["b1024"], masks["skin"],
+                        pose["plate"], **extra)
+        image2k = compose(personal["p2k"], r2k, masks["garment"], personal["hair"], uncovered, pose["b2k"], masks["skin"],
+                          pose["plate"], **extra)
         return image, image2k
 
 

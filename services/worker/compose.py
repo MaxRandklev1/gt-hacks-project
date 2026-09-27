@@ -94,7 +94,8 @@ def covering_mask(labels):
 def base_regions(base_labels):
     """Where the base model's real head and arms are; used to tell them apart from printed artwork."""
     return {"face": _dilate(group_mask(base_labels, "face"), base_labels.shape[1] // 40),
-            "arms": _dilate(group_mask(base_labels, "arms"), base_labels.shape[1] // 60)}
+            "arms": _dilate(group_mask(base_labels, "arms"), base_labels.shape[1] // 60),
+            "head": head_mask(base_labels)}
 
 
 def garment_mask(labels, regions):
@@ -103,6 +104,14 @@ def garment_mask(labels, regions):
     lower = np.isin(labels, [LABELS.index(n) for n in ("pants", "skirt", "belt", "left_leg", "right_leg", "left_shoe", "right_shoe", "bag")])
     head = head_mask(labels, regions["face"])
     arms = _keep_touching(group_mask(labels, "arms"), regions["arms"], 0.5)
+    # The pose model wears nothing on his head, so "hat"/"scarf" pixels outside his own head are part
+    # of the garment: hoods, scarves and cowl necks the parser labels as head coverings.
+    worn = np.isin(labels, [LABELS.index("hat"), LABELS.index("scarf")])
+    if "head" in regions:
+        worn &= ~regions["head"]
+    else:
+        worn[:] = False
+    head &= ~worn
     garment = person & ~lower & ~head & ~arms
     # Keep the main garment piece(s); drop specks, then close holes left by printed artwork.
     pieces = [c for c, area in _components(garment) if area > 0.002 * garment.size]
@@ -198,12 +207,67 @@ def hair_matte(personal, pose_base, hair):
     return (cv2.GaussianBlur(alpha * region, (3, 3), 0))[..., None]
 
 
-def compose(personal, garment_render, garment, hair, uncovered=None, pose_base=None, render_skin=None, base_plate=None):
+def extend_garment(render, garment, gap):
+    """Colour for gap pixels from their nearest garment pixel in the render (extends the fabric outward)."""
+    source = (~garment).astype(np.uint8)  # Zero on garment pixels: distances are measured to the garment.
+    _, labels = cv2.distanceTransformWithLabels(source, cv2.DIST_L2, 5, labelType=cv2.DIST_LABEL_PIXEL)
+    coords = np.argwhere(source == 0)      # Zero pixels in scan order; label k is coords[k - 1].
+    nearest = coords[np.clip(labels[gap] - 1, 0, len(coords) - 1)]
+    return render[nearest[:, 0], nearest[:, 1]]
+
+
+def fill_uncovered(out, personal, garment_render, uncovered, render_skin, render_background, skin_tone, garment, hair, feather_px):
+    """Fill tee left visible by the new garment from what the garment render actually shows there.
+
+    - Render shows skin (e.g. the neck inside an open collar): use it, with its real shading and collar
+      shadows, moved to the person's skin tone (the same statistics transfer as the arm correction).
+    - Render shows background (e.g. above a lower shoulder line): use it, corrected to the personal
+      base's background with a local, low-frequency offset so no brighter or darker patch shows.
+    - A thin gap between hair above and the garment below (a shoulder line that sits a few pixels lower
+      than the base tee's) becomes garment: the fabric is extended to meet the hair resting on it.
+    - Anything else is inpainted from the surroundings, as before.
+    """
+    size = personal.size
+    render = np.asarray(garment_render, np.float32)
+    filled = out.copy()
+    rest = uncovered.copy()
+    reach = max(3, size[0] // 50)
+    gap = rest & _dilate(garment, reach) & _dilate(hair, reach)
+    if gap.any() and garment.any():
+        filled[gap] = extend_garment(render, garment, gap)
+        rest &= ~gap
+    if render_skin is not None and skin_tone is not None:
+        skin = rest & resize_mask(render_skin, size)
+        if skin.any():
+            lab = cv2.cvtColor(render.astype(np.uint8), cv2.COLOR_RGB2LAB).astype(np.float32)
+            shifted = (lab - skin_tone["render"]) * skin_tone["ratio"] + skin_tone["person"]
+            filled[skin] = cv2.cvtColor(np.clip(shifted, 0, 255).astype(np.uint8), cv2.COLOR_LAB2RGB).astype(np.float32)[skin]
+            rest &= ~skin
+    if render_background is not None:
+        background = rest & resize_mask(render_background, size)
+        if background.any():
+            reference = resize_mask(render_background, size) & ~uncovered & ~garment & ~hair
+            sigma = max(4.0, size[0] / 40)
+            weight = cv2.GaussianBlur(reference.astype(np.float32), (0, 0), sigma)
+            difference = (np.asarray(personal, np.float32) - render) * reference[..., None]
+            offset = cv2.GaussianBlur(difference, (0, 0), sigma) / np.maximum(weight, 1e-3)[..., None]
+            filled[background] = np.clip(render + offset, 0, 255)[background]
+            rest &= ~background
+    if rest.any():
+        inpainted = cv2.inpaint(np.clip(out, 0, 255).astype(np.uint8), _dilate(rest, 1).astype(np.uint8), 5, cv2.INPAINT_TELEA)
+        filled[rest] = inpainted.astype(np.float32)[rest]
+    alpha = feather(uncovered, feather_px)
+    return out * (1 - alpha) + filled * alpha
+
+
+def compose(personal, garment_render, garment, hair, uncovered=None, pose_base=None, render_skin=None, base_plate=None,
+            render_background=None, skin_tone=None):
     """Try-on = personal base, garment region from the render, the person's hair/covering on top.
 
     `hair`: hair/head covering that may lie over the garment (see covering_mask).
     `uncovered`: tee pixels (pose base or personal base) the new garment does not cover; filled from
-    the personal base's surroundings.
+    what the render shows there (fill_uncovered), given `render_skin`, `render_background` and
+    `skin_tone` (render_skin_transform).
     `pose_base` + `base_plate` (pose-base tee or background): clean plate for matting hair over the
     new garment, which keeps curls and wisps without a fringe.
     """
@@ -215,35 +279,33 @@ def compose(personal, garment_render, garment, hair, uncovered=None, pose_base=N
     out = blend(personal, garment_render, garment_alpha)
     if uncovered is not None:
         uncovered = resize_mask(uncovered, size) & ~garment & ~hair
+    if hair.any():
+        # Thin gaps between hair and a garment whose shoulder sits a little lower than the base tee's:
+        # treat them like uncovered tee so the fabric is extended to meet the hair resting on it.
+        k = max(3, size[0] // 90)
+        closed = cv2.morphologyEx((garment | hair).astype(np.uint8), cv2.MORPH_CLOSE,
+                                  cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * k + 1, 2 * k + 1))) > 0
+        gap = closed & ~garment & ~hair & _dilate(garment, k) & _dilate(hair, k)
+        uncovered = gap if uncovered is None else uncovered | gap
     if uncovered is not None and uncovered.any():
-        # Fill from the personal base's own surroundings (its skin or background), so neither the
-        # model's neck nor a differently lit render background shows through.
-        filled = cv2.inpaint(np.clip(out, 0, 255).astype(np.uint8), _dilate(uncovered, 1).astype(np.uint8), 5, cv2.INPAINT_TELEA)
-        alpha = feather(uncovered, feather_px)
-        out = out * (1 - alpha) + filled.astype(np.float32) * alpha
+        out = fill_uncovered(out, personal, garment_render, uncovered, render_skin, render_background, skin_tone,
+                             garment, hair, feather_px)
     if hair.any():
         p = np.asarray(personal, np.float32)
+        # What now sits behind the hair: the render, except where uncovered tee/gaps were just filled.
+        filled_area = feather(uncovered, feather_px) if uncovered is not None else 0
+        behind = np.asarray(garment_render, np.float32) * (1 - filled_area) + out * filled_area
         plate = resize_mask(base_plate, size) if base_plate is not None and pose_base is not None else np.zeros_like(hair)
         over = hair & plate
         if over.any():
             # Clean plate: behind hair, the pose base shows what was really there (tee or background)
             # and the render what should be there now. Swap only that contribution.
             alpha = hair_matte(personal, pose_base, over)
-            replaced = p + (1 - alpha) * (np.asarray(garment_render, np.float32) - np.asarray(pose_base, np.float32))
+            replaced = p + (1 - alpha) * (behind - np.asarray(pose_base, np.float32))
             region = feather(_dilate(over, max(2, size[0] // 200)) & plate, feather_px)
             out = out * (1 - region) + replaced * region
         other = feather(hair & ~plate & garment, feather_px)
         out = out * (1 - other) + p * other
-        # Hair that rested on the base tee can end a few pixels above a garment whose shoulder sits
-        # lower. Close those thin gaps from the surrounding hair and fabric so the hair rests on it.
-        k = max(3, size[0] // 90)
-        closed = cv2.morphologyEx((garment | hair).astype(np.uint8), cv2.MORPH_CLOSE,
-                                  cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * k + 1, 2 * k + 1))) > 0
-        gap = closed & ~garment & ~hair & _dilate(garment, k) & _dilate(hair, k)
-        if gap.any():
-            filled = cv2.inpaint(np.clip(out, 0, 255).astype(np.uint8), _dilate(gap, 1).astype(np.uint8), 5, cv2.INPAINT_TELEA)
-            alpha = feather(gap, feather_px)
-            out = out * (1 - alpha) + filled.astype(np.float32) * alpha
     return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8))
 
 
@@ -318,3 +380,14 @@ def match_skin_tone(image, arms_mask, transform):
     alpha = feather(_dilate(mask, max(1, image.width // 500)), max(2, image.width // 350))
     out = lab * (1 - alpha) + shifted * alpha
     return Image.fromarray(cv2.cvtColor(np.clip(out, 0, 255).astype(np.uint8), cv2.COLOR_LAB2RGB))
+
+
+def render_skin_transform(personal, person_skin, render, render_skin):
+    """Lab statistics that move the garment render's skin (the pose model's neck) to the person's."""
+    def stats(image, mask):
+        lab = cv2.cvtColor(np.asarray(image.convert("RGB")), cv2.COLOR_RGB2LAB).astype(np.float32)
+        return _skin_stats(lab, cv2.erode(mask.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0, 40)
+    person, model = stats(personal, person_skin), stats(render, render_skin)
+    if person is None or model is None:
+        return None
+    return {"person": person[0], "render": model[0], "ratio": np.clip(person[1] / model[1], 0.8, 1.25)}
