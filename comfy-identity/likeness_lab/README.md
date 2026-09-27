@@ -20,6 +20,8 @@ It needs ComfyUI running, plus the worker's cached garment renders and pose base
 
 **Angles mode** compares only A with F: A's exact settings and seed plus the two extra angles, so the extra photos are the only difference. It takes about 2½ minutes. On the owner's photos: A 54 s, F 84 s of onboarding GPU time. A finished session opens directly at `http://127.0.0.1:8765/?session=<id>` while the lab keeps running.
 
+**Production decision:** the owner found the controlled A/F results almost identical and slightly preferred A. Production therefore stays single-selfie, using A's existing settings; extra-angle capture is not required. See the [saved decision](../../docs/research/SINGLE_SELFIE_DECISION.md) for exact timings, scope, and the distinction between shuffled display labels and method names.
+
 Extra angles must show the person's current look. In the first Jon run, older extra photos with a full beard gave version E a beard his selfie didn't have.
 
 The head-swap LoRA stays at 0.65 in every version. Its authors suggest starting at 1.0, but at 1.0 it gave a short-haired test person long hair. An isolation run confirmed the strength setting, not the reference size or steps, caused it.

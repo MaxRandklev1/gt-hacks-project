@@ -14,6 +14,8 @@ The project currently works on **still images**. Firebase hosts the app, authent
 
 ## Judge likeness by eye
 
+**Current production decision:** keep one selfie and version A. In the owner's controlled comparison, adding two angles took 83.6 s versus 54.2 s for A, with almost identical results and a slight preference for A. The unfinished three-angle onboarding change was dropped. See the [decision and retained settings](docs/research/SINGLE_SELFIE_DECISION.md).
+
 `.\scripts\start-likeness-lab.ps1` opens a local page (http://127.0.0.1:8765). Upload a selfie, compare shuffled versions of yourself (today's onboarding, a full-detail reference, a close-up face pass, a face-swap polish, and optional extra angles), pick the one that looks like you and note what's off. The winning version across people becomes onboarding's default. See the [Likeness Lab guide](comfy-identity/likeness_lab/README.md).
 
 ## Run the deployed demo
