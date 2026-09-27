@@ -292,6 +292,20 @@ def decode_image(data_url, limit=25 * 1024 * 1024):
     return data
 
 
+def load_session(session_id):
+    """Sessions survive a lab restart: rebuild one from its saved session.json (the reveal stays hidden until a pick)."""
+    if session_id not in sessions:
+        path = SESSIONS / session_id / "session.json"
+        if not path.is_file():
+            return None
+        saved = json.loads(path.read_text())
+        reveal = saved.pop("reveal", {})
+        saved["_mapping"] = {label: info["version"] for label, info in reveal.items()}
+        saved["_timings"] = {info["version"]: info["onboardingSeconds"] for info in reveal.values()}
+        sessions[session_id] = saved
+    return sessions[session_id]
+
+
 class Handler(BaseHTTPRequestHandler):
     def send(self, code, body, content_type="application/json"):
         payload = body if isinstance(body, bytes) else json.dumps(body).encode()
@@ -306,6 +320,7 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
+        self.path = self.path.split("?", 1)[0]  # The page reads ?session= itself.
         if self.path == "/":
             return self.send(200, PAGE.read_bytes(), "text/html; charset=utf-8")
         if self.path == "/api/garments":
@@ -316,7 +331,7 @@ class Handler(BaseHTTPRequestHandler):
             buffer = io.BytesIO(); image.save(buffer, "JPEG", quality=85)
             return self.send(200, buffer.getvalue(), "image/jpeg")
         match = re.fullmatch(r"/api/session/([0-9a-f]{32})", self.path)
-        if match and match[1] in sessions:
+        if match and load_session(match[1]):
             return self.send(200, public(sessions[match[1]]))
         match = re.fullmatch(r"/files/([0-9a-f]{32})/([A-Za-z0-9_.-]+\.(?:png|jpg))", self.path)
         if match and (SESSIONS / match[1] / match[2]).is_file():
@@ -346,7 +361,7 @@ class Handler(BaseHTTPRequestHandler):
                 threading.Thread(target=run_session, args=(session, selfie, extras, garment), daemon=True).start()
                 return self.send(200, {"id": session["id"]})
             match = re.fullmatch(r"/api/session/([0-9a-f]{32})/pick", self.path)
-            if match and match[1] in sessions:
+            if match and load_session(match[1]):
                 session = sessions[match[1]]
                 label = body.get("label")
                 if session.get("status") != "ready" or (label != "none" and label not in session.get("_mapping", {})):
