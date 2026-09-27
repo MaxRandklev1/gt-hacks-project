@@ -11,7 +11,7 @@ import { Scanner } from './components/Scanner';
 import { SelfieCapture, type CapturedSelfie } from './components/SelfieCapture';
 import { createMeasurements, editMeasurement, formatHeight, formatWeight, measurementsValid, switchMeasurementSystem } from './lib/measurements';
 import { validateReferenceSelfie } from './lib/validation';
-import { onboardingProgress } from './lib/onboarding';
+import { onboardingProgress, needsPersonalLookReview, readOnboardingChoices, saveOnboardingChoices, type OnboardingChoices } from './lib/onboarding';
 import './styles.css';
 
 type View = 'home' | 'scanner' | 'gallery' | 'detail' | 'account';
@@ -88,6 +88,7 @@ function App() {
   const [uploadProgress, setUploadProgress] = useState<number>();
   const [uploading, setUploading] = useState(false);
   const [enrollmentRequestId, setEnrollmentRequestId] = useState<string>();
+  const [onboardingChoices, setOnboardingChoices] = useState<OnboardingChoices>({});
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [pendingGarment, setPendingGarment] = useState<string | null>(initialPending);
@@ -110,6 +111,8 @@ function App() {
       setAccountError(''); setError(''); setNotice('');
       setProfile(null); setJobs([]); setGenerations([]); setSelectedGeneration(null);
       setConsent(false); setMeasurements(createMeasurements()); setSelfie(null);
+      setSubmittedSelfieUrl(undefined);
+      setOnboardingChoices(next ? readOnboardingChoices(next.uid) : {});
       setEditingProfile(false); setPhase(null); setEnrollmentRequestId(undefined);
       setUploading(false); setUploadProgress(undefined); setBusy(false); setDownloading(false);
       setRequestedJob(undefined); setRequesting(false); requested.current.clear();
@@ -160,8 +163,9 @@ function App() {
   }, [pendingGarment, user?.uid, preview]);
 
   const identityStatus = profile?.identity?.status;
-  const setup = onboardingProgress(profile, jobs, enrollmentRequestId);
+  const setup = onboardingProgress(profile, jobs, enrollmentRequestId, onboardingChoices.keptPreviousEnrollmentId);
   const ready = setup.ready;
+  const reviewingLook = ready && needsPersonalLookReview(profile, onboardingChoices.pendingLookReview);
   const enrollJob = setup.enrollment;
   const enrollmentFailed = setup.enrollmentFailed;
   const setupLoaded = !authLoading && !profileLoading && !jobsLoading && !accountError;
@@ -169,7 +173,7 @@ function App() {
     if (ready && enrollmentRequestId && profile?.identity?.version === enrollmentRequestId) setEnrollmentRequestId(undefined);
   }, [ready, enrollmentRequestId, profile?.identity?.version]);
   useEffect(() => {
-    if (preview || !setupLoaded || !user || !ready || !garment || garment.id !== pendingGarment || editingProfile) return;
+    if (preview || !setupLoaded || !user || !ready || reviewingLook || !garment || garment.id !== pendingGarment || editingProfile) return;
     const key = `${user.uid}:${garment.id}`;
     if (requested.current.has(key)) return;
     requested.current.add(key);
@@ -181,7 +185,7 @@ function App() {
       setNotice('Your piece is in the fitting room. We’ll keep its progress here.');
     }).catch(cause => { if (current) setError(errorText(cause)); }).finally(() => { if (current) setRequesting(false); });
     return () => { current = false; };
-  }, [garment, pendingGarment, user?.uid, ready, preview, editingProfile, setupLoaded]);
+  }, [garment, pendingGarment, user?.uid, ready, reviewingLook, preview, editingProfile, setupLoaded]);
 
   const activeJob = jobs.find(job => job.kind === 'generate' && (job.status === 'running' || job.status === 'queued'));
   const jobFromRequest = jobs.find(job => job.id === requestedJob);
@@ -189,7 +193,7 @@ function App() {
   const showGenerationProgress = !preview && (requesting || activeJob || awaitingJob);
   const generationList = preview ? [demoGeneration] : generations;
   const chosenGeneration = preview ? demoGeneration : (generations.find(item => item.id === selectedGeneration?.id) || selectedGeneration);
-  const screen: Screen = preview ? previewScreen : authLoading ? 'loading' : !user ? 'welcome' : !setupLoaded ? 'loading' : editingProfile && phase ? phase : ready ? view : phase || (setup.screen === 'ready' ? view : setup.screen);
+  const screen: Screen = preview ? previewScreen : authLoading ? 'loading' : !user ? 'welcome' : !setupLoaded ? 'loading' : editingProfile && phase ? phase : reviewingLook ? 'home' : ready ? view : phase || (setup.screen === 'ready' ? view : setup.screen);
   const firstName = user?.displayName?.trim().split(/\s+/)[0] || 'there';
   const isMain = ['home', 'scanner', 'gallery', 'detail', 'account'].includes(screen);
   const measurementValid = measurementsValid(measurements);
@@ -236,6 +240,7 @@ function App() {
       const jobId = await startEnrollment({ selfie: selfie.file, selfieSource: selfie.source, selfieSelectedAt: selfie.selectedAt, selfieCapturedAt: selfie.capturedAt, consent }, progress => { if (sessionEpoch.current === epoch) setUploadProgress(progress); });
       if (sessionEpoch.current !== epoch) return;
       setSubmittedSelfieUrl(URL.createObjectURL(selfie.file));
+      updateOnboardingChoices({ pendingLookReview: jobId });
       setEnrollmentRequestId(jobId); setPhase(null); setEditingProfile(false); setSelfie(null); setConsent(false);
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (cause) { if (sessionEpoch.current === epoch) setError(errorText(cause)); }
@@ -243,6 +248,20 @@ function App() {
   }
   function retakeSelfie() {
     setEditingProfile(true); setPhase('selfie'); setSelfie(null); setConsent(false); setEnrollmentRequestId(undefined); setError('');
+  }
+  function updateOnboardingChoices(choices: OnboardingChoices) {
+    setOnboardingChoices(choices);
+    if (user) saveOnboardingChoices(user.uid, choices);
+  }
+  function keepPreviousLook() {
+    if (!setup.canKeepPreviousLook || !enrollJob) return;
+    updateOnboardingChoices({ keptPreviousEnrollmentId: enrollJob.id });
+    setEnrollmentRequestId(undefined); setSubmittedSelfieUrl(undefined); setPhase(null); setView('home');
+    setNotice('Your replacement selfie was not used. You chose to keep your previous look.');
+  }
+  function approvePersonalLook() {
+    updateOnboardingChoices({});
+    setSubmittedSelfieUrl(undefined); setView(pendingGarment ? 'home' : 'scanner');
   }
   function scan(value: string) {
     try {
@@ -295,11 +314,11 @@ function App() {
       {screen === 'welcome' && <div className="welcome-layout fade-in"><section className="welcome-copy"><div className="editorial-tag"><span className="status-dot" /> PERSONAL STYLE, PERSONALLY YOURS</div><h1>A fitting room.<br />Made for <span className="serif-emphasis">you.</span></h1><p className="hero-description">Found a piece you love?<br />See yourself in it before you decide.</p><div className="welcome-cta"><button className="button button-ink google-button" onClick={login} disabled={busy || !firebaseConfigured || preview}>{busy ? <span className="spinner" /> : <GoogleMark />}Continue with Google<Icon name="arrow" size={18} /></button>{preview ? <button className="text-button" onClick={() => setPreviewScreen('measurements')}>Preview the experience <Icon name="arrow" size={17} /></button> : <button className="text-button" onClick={() => { setPreview(true); setPreviewScreen('home'); }}>Explore the demo <Icon name="arrow" size={17} /></button>}</div>{!firebaseConfigured && !preview && <p className="config-note">Live sign-in is not configured on this deployment. Explore the clearly labeled demo instead.</p>}<p className="privacy-line"><Icon name="shield" size={15} /> Your photos. Your private fitting room.</p><div className="how-it-works"><div><span>01</span><p>Make it yours<small>One selfie. Two details.</small></p></div><div><span>02</span><p>Scan a piece<small>Look for a THREAD QR.</small></p></div><div><span>03</span><p>See the possibility<small>Your own virtual try-on.</small></p></div></div></section><aside className="hero-visual"><div className="hero-topline"><span>THE PERSONAL FITTING ROOM</span><span>EST. 2026</span></div><img src={demoImage} alt="Example virtual try-on of a blue photographic T-shirt" /><div className="hero-sticker"><Icon name="spark" size={21} /><span>Same piece.<br /><strong>Your perspective.</strong></span></div><div className="hero-bottomline"><span>ONE PIECE. A WHOLE NEW POINT OF VIEW.</span><span>01 / 01</span></div><div className="sample-disclaimer">Generated example · not your profile</div></aside></div>}
 
       {(['measurements', 'selfie'] as Screen[]).includes(screen) && <div className="onboarding-layout fade-in">
-        <aside className="onboarding-aside"><p className="eyebrow">LET’S MAKE THIS PERSONAL</p><h1>Your style.<br /> Your <span className="serif-emphasis">perspective.</span></h1><p>Set up in under a minute. Every piece you discover starts with you.</p>
+        <aside className="onboarding-aside"><p className="eyebrow">LET’S MAKE THIS PERSONAL</p><h1>Your style.<br /> Your <span className="serif-emphasis">perspective.</span></h1><p>Add your details and a recent selfie. We’ll create your look before your first try-on.</p>
           <div className="setup-steps">
             <div className={screen === 'measurements' ? 'active' : 'done'}><span>{screen !== 'measurements' ? <Icon name="check" size={15} /> : '01'}</span><div>Your details<small>Height & weight</small></div></div>
             <div className={screen === 'selfie' ? 'active' : ''}><span>02</span><div>One selfie<small>Your face for every look</small></div></div>
-            <div><span>03</span><div>Your fitting room<small>Ready in seconds</small></div></div>
+            <div><span>03</span><div>Your fitting room<small>Review your look</small></div></div>
           </div>
           <div className="setup-reassurance"><Icon name="shield" size={21} /><p>Your selfie stays in your private account. It isn’t shown in the public demo.</p></div>
         </aside>
@@ -319,7 +338,7 @@ function App() {
             </form><p className="form-footnote">Switch units at any time. Your measurements stay the same.</p>
           </>}
           {screen === 'selfie' && <>
-            <div className="step-kicker"><button disabled={uploading} onClick={() => navigate('measurements')} aria-label="Back to measurements"><Icon name="back" size={16} /></button> STEP 02 <span>/ 03</span></div><h2>One selfie.<br />That’s it.</h2><p className="section-description">Face the camera in good light. Any expression is fine: every look uses the model’s pose and expression with your face.</p>
+            <div className="step-kicker"><button disabled={uploading} onClick={() => navigate('measurements')} aria-label="Back to measurements"><Icon name="back" size={16} /></button> STEP 02 <span>/ 03</span></div><h2>One selfie.<br />That’s it.</h2><p className="section-description">Face the camera in good light, with your whole head visible. We’ll aim for a neutral expression while keeping your current hair, facial hair, and head covering.</p>
             <fieldset className="selfie-fields" disabled={uploading}><SelfieCapture value={preview ? null : selfie} onChange={next => { if (!uploading) { setSelfie(next); setConsent(false); } }} preview={preview} />
             <label className="consent-check"><input type="checkbox" checked={consent} onChange={event => setConsent(event.target.checked)} /><span>This selfie is of me. I agree to use it as the face in my try-ons.</span></label></fieldset>
             {uploading && <ProgressBar value={uploadProgress} label="Saving your selfie" />}
@@ -331,14 +350,14 @@ function App() {
       {screen === 'preparing' && <div className="preparation-layout fade-in"><div className="preparation-art"><div className="orbit orbit-one" /><div className="orbit orbit-two" /><div className="profile-sculpture">{submittedSelfieUrl && !preview ? <img src={submittedSelfieUrl} alt="Your selfie" className="submitted-selfie" /> : <Icon name="user" size={68} />}</div><span className="floating-chip chip-one"><Icon name="check" size={14} /> YOUR PERSPECTIVE</span><span className="floating-chip chip-two"><Icon name="spark" size={14} /> PERSONALLY YOURS</span></div><section className="preparation-copy">
         <p className="eyebrow">STEP 03 / YOUR FITTING ROOM</p>
         <h1>{enrollmentFailed && !preview ? <>A little pause.<br />Let’s try <span className="serif-emphasis">again.</span></> : <>Your details are in.<br />Your look is <span className="serif-emphasis">on its way.</span></>}</h1>
-        <p className="hero-description">{preview ? 'This is the preparation screen preview. No selfie has been uploaded.' : enrollmentFailed ? enrollJob?.error || 'Your selfie could not be used. Take another one facing the camera.' : enrollJob?.message || 'Creating your look from your selfie. This takes about a minute.'}</p>
+        <p className="hero-description">{preview ? 'This is the preparation screen preview. No selfie has been uploaded.' : enrollmentFailed ? enrollJob?.error || 'Your selfie could not be used. Take another one facing the camera.' : enrollJob?.message || 'Creating your look from your selfie. This usually takes about a minute once processing starts; it may take longer if other people are in line.'}</p>
         {!preview && !enrollmentFailed && <ProgressBar value={enrollJob?.progress} label={enrollJob?.stage?.replaceAll('_', ' ') || 'Opening your fitting room'} />}
-        {enrollmentFailed && !preview && <button className="button button-ink" onClick={retakeSelfie}>Take another selfie <Icon name="camera" size={17} /></button>}
+        {enrollmentFailed && !preview && <><button className="button button-ink" onClick={retakeSelfie}>Take another selfie <Icon name="camera" size={17} /></button>{setup.canKeepPreviousLook && <><p>Your replacement selfie was not used. Your previous look is still saved.</p><button className="text-button" onClick={keepPreviousLook}>Keep my previous look <Icon name="arrow" size={17} /></button></>}</>}
         {preview && <button className="button button-ink" onClick={() => setPreviewScreen('home')}>Preview the fitting room <Icon name="arrow" /></button>}
         <p className="microcopy">{preview ? 'Design preview only. Progress is not simulated.' : 'Your progress is saved if you leave this page.'}</p>
       </section></div>}
 
-      {screen === 'home' && <div className="home-layout fade-in"><section className="home-primary"><div className="hello-line"><span className="status-dot" />{preview ? 'YOUR FITTING ROOM, PREVIEWED' : `YOUR FITTING ROOM IS READY`}</div><h1>{preview ? 'A new way to' : `Hey ${firstName}.`}<br />{preview ? <span className="serif-emphasis">see yourself.</span> : <>Make it <span className="serif-emphasis">yours.</span></>}</h1><p className="hero-description">Your next favorite piece is out there.<br />Let’s see it on you.</p><button className="scan-cta" onClick={() => navigate('scanner')}><span className="scan-cta-icon"><Icon name="scan" size={28} /></span><span><strong>{generations.length && !preview ? 'Scan your next piece' : 'Scan your first piece'}</strong><small>Find a THREAD QR. Start your try-on.</small></span><Icon name="arrow" size={23} /></button>{pendingGarment && !preview && <div className="pending-garment"><Icon name="scan" /><div><strong>{garmentLoading ? 'Finding your piece…' : garment?.name || 'Scanned piece'}</strong><p>{requesting ? 'Starting your try-on automatically…' : error ? 'We couldn’t start this try-on yet.' : 'Ready to enter your fitting room.'}</p>{error && <button className="text-button" onClick={() => retryGarment(pendingGarment)}>Try again <Icon name="retry" size={14} /></button>}</div></div>}{showGenerationProgress && <div className="job-card"><div className="job-card-heading"><span className="spinner" /><div><strong>{activeJob?.status === 'queued' ? 'Your piece is in line' : 'Your look is taking shape'}</strong><p>{activeJob?.message || 'We’re creating your personalized try-on. This takes a few seconds.'}</p></div></div><ProgressBar value={activeJob?.progress} label={activeJob?.stage?.replaceAll('_', ' ') || (requesting ? 'Starting your try-on' : 'Preparing your look')} /><button className="text-button" onClick={() => navigate('gallery')}>View your looks <Icon name="arrow" size={16} /></button></div>}{!preview && profile?.identity?.previewPath && <div className="your-look"><ProtectedImage path={profile.identity.previewPath} alt="Your look in the fitting room" className="your-look-image" /><div><strong>This is you in the fitting room.</strong><p>Every piece you scan goes on this look.</p><button className="text-button" onClick={retakeSelfie}>Not quite you? Retake your selfie <Icon name="camera" size={15} /></button></div></div>}<div className="home-note"><span>SCAN. TRY. DISCOVER.</span><p>No changing room queue.<br />Just a different point of view.</p></div></section><aside className="home-look"><div className="section-heading compact"><div><p className="eyebrow">{preview || !generations.length ? 'A LITTLE INSPIRATION' : 'YOUR LATEST LOOK'}</p><h2>{preview || !generations.length ? 'The possibilities look good.' : 'Made for your mood.'}</h2></div></div>{preview ? lookCard(demoGeneration, 0) : generations.length ? lookCard(generations[0], 0) : <div className="inspiration-card"><img src={demoImage} alt="Example generated try-on with a photographic T-shirt" /><span className="example-label">GENERATED EXAMPLE</span><div><p>Your first look<br />starts with a scan.</p><span>This example is not your profile.</span></div></div>}</aside></div>}
+      {screen === 'home' && <div className="home-layout fade-in"><section className="home-primary"><div className="hello-line"><span className="status-dot" />{preview ? 'YOUR FITTING ROOM, PREVIEWED' : `YOUR FITTING ROOM IS READY`}</div><h1>{preview ? 'A new way to' : `Hey ${firstName}.`}<br />{preview ? <span className="serif-emphasis">see yourself.</span> : <>Make it <span className="serif-emphasis">yours.</span></>}</h1><p className="hero-description">Your next favorite piece is out there.<br />Let’s see it on you.</p><button className="scan-cta" disabled={reviewingLook} onClick={() => navigate('scanner')}><span className="scan-cta-icon"><Icon name="scan" size={28} /></span><span><strong>{generations.length && !preview ? 'Scan your next piece' : 'Scan your first piece'}</strong><small>{reviewingLook ? 'Confirm your look below to continue.' : 'Find a THREAD QR. Start your try-on.'}</small></span><Icon name="arrow" size={23} /></button>{pendingGarment && !preview && <div className="pending-garment"><Icon name="scan" /><div><strong>{garmentLoading ? 'Finding your piece…' : garment?.name || 'Scanned piece'}</strong><p>{reviewingLook ? 'Your scanned piece is saved. Confirm your look below to start.' : requesting ? 'Starting your try-on automatically…' : error ? 'We couldn’t start this try-on yet.' : 'Ready to enter your fitting room.'}</p>{error && <button className="text-button" onClick={() => retryGarment(pendingGarment)}>Try again <Icon name="retry" size={14} /></button>}</div></div>}{showGenerationProgress && <div className="job-card"><div className="job-card-heading"><span className="spinner" /><div><strong>{activeJob?.status === 'queued' ? 'Your piece is in line' : 'Your look is taking shape'}</strong><p>{activeJob?.message || 'We’re creating your personalized try-on. This takes a few seconds.'}</p></div></div><ProgressBar value={activeJob?.progress} label={activeJob?.stage?.replaceAll('_', ' ') || (requesting ? 'Starting your try-on' : 'Preparing your look')} /><button className="text-button" onClick={() => navigate('gallery')}>View your looks <Icon name="arrow" size={16} /></button></div>}{!preview && profile?.identity?.previewPath && <div className={`your-look ${reviewingLook ? 'is-review' : ''}`}><ProtectedImage path={profile.identity.previewPath} alt="Your look in the fitting room" className="your-look-image" /><div><strong>{reviewingLook ? 'Does this look like you?' : 'Your saved fitting-room look.'}</strong><p>{reviewingLook ? 'Check your face, hair, and skin tone. Every piece you scan will use this appearance.' : 'Every piece you scan goes on this look.'}</p>{reviewingLook && <button className="button button-ink" onClick={approvePersonalLook}>Yes, use this look <Icon name="check" size={17} /></button>}<button className="text-button" onClick={retakeSelfie}>Not quite you? Retake your selfie <Icon name="camera" size={15} /></button></div></div>}<div className="home-note"><span>SCAN. TRY. DISCOVER.</span><p>No changing room queue.<br />Just a different point of view.</p></div></section><aside className="home-look"><div className="section-heading compact"><div><p className="eyebrow">{preview || !generations.length ? 'A LITTLE INSPIRATION' : 'YOUR LATEST LOOK'}</p><h2>{preview || !generations.length ? 'The possibilities look good.' : 'Made for your mood.'}</h2></div></div>{preview ? lookCard(demoGeneration, 0) : generations.length ? lookCard(generations[0], 0) : <div className="inspiration-card"><img src={demoImage} alt="Example generated try-on with a photographic T-shirt" /><span className="example-label">GENERATED EXAMPLE</span><div><p>Your first look<br />starts with a scan.</p><span>This example is not your profile.</span></div></div>}</aside></div>}
 
       {screen === 'scanner' && <div className="scanner-layout"><aside className="scanner-copy"><p className="eyebrow">FROM THE RACK TO YOUR REALITY</p><h1>{generations.length && !preview ? 'Scan your next piece.' : 'Scan your first piece.'}<br /><span className="serif-emphasis">See it on you.</span></h1><p>Scan a registered garment’s QR code and we’ll start your personalized try-on automatically.</p><div className="scanner-instructions"><div><span>01</span><p>Find the THREAD QR<br /><small>On the garment’s tag or display.</small></p></div><div><span>02</span><p>Give it a quick scan<br /><small>Keep the full code inside the frame.</small></p></div><div><span>03</span><p>We’ll take it from here<br /><small>Your look will appear in Your looks.</small></p></div></div></aside><Scanner onDetected={scan} onClose={() => navigate('home')} /></div>}
 

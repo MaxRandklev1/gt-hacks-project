@@ -21,3 +21,6 @@
 .your-look strong { display: block; }
 .your-look p { margin: 4px 0 6px; opacity: 0.75; }
 .profile-sculpture:has(.submitted-selfie) { overflow: hidden; }
+.your-look.is-review { flex-direction: column; align-items: stretch; }
+.your-look.is-review .your-look-image { width: 100%; height: auto; max-height: 520px; object-fit: contain; }
+.your-look.is-review .button { margin: 10px 0; }

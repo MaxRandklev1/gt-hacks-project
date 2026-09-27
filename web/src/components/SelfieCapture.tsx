@@ -120,7 +120,7 @@ export function SelfieCapture({ value, onChange, preview = false }: { value: Cap
       <button type="button" className="button button-outline" disabled={preview || busy} onClick={choose}><Icon name="upload" size={17} /> Choose a recent selfie</button>
       {phase === 'live' && <button type="button" className="text-button" onClick={() => { stop(); setPhase('idle'); }}>Stop camera</button>}
     </>}</div>
-    <p className="selfie-footnote">Use a clear, unfiltered photo with your current haircut and facial hair. Keep your hair and face visible—no hats, sunglasses, or obstructions. This is your try-on reference, separate from your eight training photos. JPG, PNG, or WebP · 20 MB max.</p>
+    <p className="selfie-footnote">Use a clear, unfiltered photo with your current haircut, facial hair, or usual head covering. Keep your face unobstructed and include your whole head and shoulders. Avoid sunglasses and filters. This one selfie is your try-on reference. JPG, PNG, or WebP · 20 MB max.</p>
     {phase === 'live' && <p className="selfie-footnote">The live camera preview is mirrored; your saved selfie is not.</p>}
   </section>;
 }
