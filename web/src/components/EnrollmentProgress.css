@@ -26,8 +26,6 @@
 .enrollment-checklist .is-done{color:#708456}
 .enrollment-checklist .is-done .enrollment-step-mark{background:#e8efdc;border-color:#d5e1c1}
 .enrollment-step-mark .spinner{width:13px;height:13px;border-width:1px}
-.enrollment-explanation{display:flex;align-items:flex-start;gap:9px;padding-top:17px;border-top:1px solid var(--line);font-size:12px;line-height:1.75;color:#717e61}
-.enrollment-explanation>svg{flex-shrink:0;margin-top:2px;color:#839665}
 .enrollment-progress.has-failed .enrollment-status-card{background:#faf6ed;border-color:#e5dcc5}
 .enrollment-progress.has-failed .enrollment-status-label{color:#877348}
 .preparation-copy{min-width:0;width:100%}

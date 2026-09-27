@@ -49,6 +49,5 @@ export function EnrollmentProgress({ job, awaitingIdentity = false, preview = fa
         <div><strong>{step.label}<span className="sr-only"> — {step.state === 'done' ? 'Complete' : step.state === 'current' ? 'In progress' : 'Not started'}</span></strong><p>{step.detail}</p></div>
       </li>)}
     </ol>}
-    {!preview && !state.failed && <p className="enrollment-explanation"><Icon name="shield" size={16} /><span>This setup creates your personal look once. Clothing scans then reuse it, so you won’t repeat this step for every piece.</span></p>}
   </div>;
 }
