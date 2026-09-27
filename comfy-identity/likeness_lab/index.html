@@ -56,7 +56,11 @@
       <div class="drop"><strong>Extra angle (optional)</strong><small>Head turned slightly right. Take it now: same hair and facial hair as your selfie.</small>
         <input type="file" accept="image/jpeg,image/png,image/webp" id="extra2"><img id="extra2Preview" hidden alt="Extra angle preview"></div>
     </div>
-    <div class="row" style="margin-top:16px"><button id="run">Make my versions</button><span class="status" id="status"></span></div>
+    <div class="row" style="margin-top:16px">
+      <label><input type="radio" name="mode" value="full" checked> Full comparison (5 versions, ~10 min)</label>
+      <label><input type="radio" name="mode" value="angles"> Today's version vs. + extra angles (2 versions, ~2–3 min, needs both extra angles)</label>
+    </div>
+    <div class="row" style="margin-top:12px"><button id="run">Make my versions</button><span class="status" id="status"></span></div>
   </div>
 
   <section id="results" hidden>
@@ -110,7 +114,8 @@ $('run').onclick = async () => {
     const extras = [];
     for (const id of ['extra1', 'extra2']) if ($(id).files[0]) extras.push(await toDataUrl($(id).files[0]));
     const response = await fetch('/api/run', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ garment: garment.value, selfie: await toDataUrl($('selfie').files[0]), extras }) });
+      body: JSON.stringify({ garment: garment.value, mode: document.querySelector('input[name=mode]:checked').value,
+        selfie: await toDataUrl($('selfie').files[0]), extras }) });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error);
     session = data.id; started = Date.now(); watch();
@@ -123,7 +128,7 @@ function watch() {
   poll = setInterval(async () => {
     const data = await (await fetch('/api/session/' + session)).json();
     const seconds = Math.round((Date.now() - started) / 1000);
-    if (data.status === 'running') { $('status').textContent = `${data.message} (${seconds}s — usually 3–5 minutes)`; return; }
+    if (data.status === 'running') { $('status').textContent = `${data.message} (${seconds}s)`; return; }
     clearInterval(poll); $('run').disabled = false;
     if (data.status === 'failed') { $('status').innerHTML = `<span class="error">${data.message}</span>`; return; }
     $('status').textContent = `Done in ${seconds}s.`; show(data);
@@ -156,6 +161,9 @@ async function pick(label) {
   $('pickStatus').textContent = label === 'none' ? 'Saved: none looked like you. Your notes tell us what to fix.' : 'Saved. The versions are revealed below each card.';
 }
 $('none').onclick = () => pick('none');
+// Open a prepared session directly: http://127.0.0.1:8765/?session=<id>
+const linked = new URLSearchParams(location.search).get('session');
+if (linked && /^[0-9a-f]{32}$/.test(linked)) { session = linked; started = Date.now(); $('run').disabled = true; watch(); }
 $('again').onclick = () => { $('results').hidden = true; for (const id of ['selfie', 'extra1', 'extra2']) { $(id).value = ''; $(id + 'Preview').hidden = true; } $('note').value = '';
   document.querySelectorAll('#offs input').forEach(i => i.checked = false); window.scrollTo({ top: 0, behavior: 'smooth' }); };
 </script>

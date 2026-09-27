@@ -9,6 +9,7 @@ Versions (labels are shuffled per session and revealed after you pick):
   C  B + close-up face pass: head crop enlarged to ~1024 px, redrawn from the selfie, blended back
   D  C + local HyperSwap identity polish on the close-up
   E  (only with extra selfies) C using every uploaded angle as a reference
+Angles mode compares only A with F: A's exact settings and seed plus the two extra angles.
 
 Start with the worker environment while the GPU is otherwise idle:
   services/worker/.venv/Scripts/python.exe comfy-identity/likeness_lab/lab.py
@@ -54,6 +55,7 @@ DESCRIPTIONS = {
     "C": "B + close-up face pass (head redrawn at ~1024 px)",
     "D": "C + HyperSwap identity polish",
     "E": "C using all uploaded selfie angles",
+    "F": "Today's onboarding + the two extra angles (same settings and seed as A)",
 }
 
 worker = Worker(Mock(), ComfyClient(), Mock(), {}, STATE)
@@ -152,6 +154,9 @@ def face_view(image_2k, labels_1024):
 
 
 def run_session(session, selfie_bytes, extra_bytes, garment):
+    if session.get("mode") == "angles":
+        return run_angles(session, selfie_bytes, extra_bytes, garment)
+
     folder = SESSIONS / session["id"]
     def progress(message):
         session["message"] = message
@@ -211,6 +216,58 @@ def run_session(session, selfie_bytes, extra_bytes, garment):
             session["_timings"] = {k: round(v, 1) for k, v in timings.items()}
             session.update(status="ready", message="Pick the one that looks most like you.", cards=cards)
             (folder / "session.json").write_text(json.dumps(public(session, reveal=True), indent=2))
+    except Exception as error:
+        traceback.print_exc()
+        session.update(status="failed", message=str(error) if isinstance(error, ValueError) else f"Something failed: {type(error).__name__}. See the lab console.")
+
+
+def prepare(session, selfie_bytes, extra_bytes):
+    """Crop every photo to head and shoulders; returns (profile_id, extra Comfy inputs)."""
+    folder = SESSIONS / session["id"]
+    images = [ImageOps.exif_transpose(Image.open(io.BytesIO(data))).convert("RGB") for data in [selfie_bytes, *extra_bytes]]
+    crop_paths = []
+    for index, image in enumerate(images):
+        try:
+            crop = head_crop(image, worker.human().parse(image))
+        except ValueError as error:
+            raise ValueError(("Selfie" if index == 0 else f"Extra photo {index}") + ": " + str(error)) from None
+        crop_paths.append(folder / f"crop-{index}.png")
+        crop.save(crop_paths[-1])
+    images[0].save(folder / "selfie.jpg", quality=92)
+    profile_id = comfy.create_profile("likeness-lab-" + session["id"][:8], [crop_paths[0]])["id"]
+    return profile_id, [comfy.upload_image(path) for path in crop_paths[1:]]
+
+
+def finish(session, versions, timings, garment):
+    session["message"] = "Putting on the garment…"
+    shuffled = random.sample(list(versions), len(versions))
+    cards = []
+    for label, variant in zip("12345", shuffled):
+        p1024, p2k = versions[variant]
+        image, image2k = try_on(p1024, p2k, garment)
+        labels = worker.human().parse(p1024)
+        cards.append({"label": label, "full": save(session, f"v{label}.png", image),
+                      "face": save(session, f"v{label}-face.jpg", face_view(image2k, labels), 92)})
+        session.setdefault("_mapping", {})[label] = variant
+    session["_timings"] = {k: round(v, 1) for k, v in timings.items()}
+    session.update(status="ready", message="Pick the one that looks most like you.", cards=cards)
+    (SESSIONS / session["id"] / "session.json").write_text(json.dumps(public(session, reveal=True), indent=2))
+
+
+def run_angles(session, selfie_bytes, extra_bytes, garment):
+    """Controlled test: today's onboarding (A) vs the same settings and seed plus two extra angles (F)."""
+    try:
+        with gpu:
+            if len(extra_bytes) != 2:
+                raise ValueError("This comparison needs both extra angle photos.")
+            profile_id, extra_names = prepare(session, selfie_bytes, extra_bytes)
+            versions, timings = {}, {}
+            for variant, extras in (("A", ()), ("F", extra_names)):
+                session["message"] = "Version A: today's onboarding…" if variant == "A" else "Version F: with your extra angles…"
+                t = time.perf_counter()
+                versions[variant] = body_pass(garment["base"], profile_id, steps=24, reference_mp=0.35, lora=0.65, extra_names=extras)
+                timings[variant] = time.perf_counter() - t
+            finish(session, versions, timings, garment)
     except Exception as error:
         traceback.print_exc()
         session.update(status="failed", message=str(error) if isinstance(error, ValueError) else f"Something failed: {type(error).__name__}. See the lab console.")
@@ -282,7 +339,8 @@ class Handler(BaseHTTPRequestHandler):
                 selfie = decode_image(body.get("selfie"))
                 extras = [decode_image(item) for item in (body.get("extras") or [])[:2]]
                 session = {"id": uuid.uuid4().hex, "status": "running", "message": "Checking your photos…",
-                           "createdAt": now(), "extras": len(extras)}
+                           "createdAt": now(), "extras": len(extras),
+                           "mode": "angles" if body.get("mode") == "angles" else "full"}
                 (SESSIONS / session["id"]).mkdir(parents=True)
                 sessions[session["id"]] = session
                 threading.Thread(target=run_session, args=(session, selfie, extras, garment), daemon=True).start()
